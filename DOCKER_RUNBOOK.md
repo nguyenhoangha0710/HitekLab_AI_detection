@@ -95,18 +95,28 @@ Worker lay 1 frame moi luot de giu cong bang giua camera
 Viewer nhan frame da xu ly bang WebSocket
 ```
 
-## YOLO Mode
+## YOLOv11 On Modal
 
-Mac dinh worker dang chay detector debug cho nhe:
-
-```yaml
-command: ["python", "-m", "app.ai_worker_main", "--shard-id", "0", "--worker-id", "ai-worker-0", "--detector", "debug"]
-```
-
-Image Docker mac dinh khong cai YOLO/Torch de build nhanh. Neu muon chay YOLO
-person detection trong Docker, bat build arg `INSTALL_YOLO=true` cho service worker
-va doi command cua `ai-worker` thanh:
+Mac dinh project Docker hien tai de `ai-worker` goi YOLOv11 endpoint tren Modal.
+Worker local van claim frame tu Redis, sau do gui JPEG len Modal de detect `person`
++ `car`, nhan bbox ve, ve overlay va publish len viewer.
 
 ```yaml
-command: ["python", "-m", "app.ai_worker_main", "--shard-id", "0", "--worker-id", "ai-worker-0", "--detector", "yolo", "--yolo-model", "yolov8n.pt", "--confidence", "0.35", "--device", "cpu"]
+command: ["python", "-m", "app.ai_worker_main", "--shard-id", "0", "--worker-id", "ai-worker-0", "--detector", "modal", "--yolo-classes", "person,car", "--confidence", "0.35", "--modal-timeout-seconds", "30"]
 ```
+
+Chay Modal endpoint truoc:
+
+```powershell
+modal serve code\ai_service\modal_yolo11_service.py
+```
+
+Copy URL endpoint `detect`, roi set bien moi truong truoc khi chay Docker:
+
+```powershell
+$env:MODAL_YOLO_ENDPOINT_URL="https://...modal.run"
+docker compose up --build
+```
+
+Neu muon chay YOLO local trong worker container, doi `--detector modal` thanh
+`--detector yolo` va build worker voi `INSTALL_YOLO=true`.

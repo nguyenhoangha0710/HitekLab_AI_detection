@@ -120,7 +120,8 @@ services:
       AI_REDIS_FRAME_BUFFER_SIZE: "100"
       AI_REDIS_CLAIM_BATCH_SIZE: "1"
       AI_PROCESSED_STREAM_BUFFER_SIZE: "300"
-    command: ["python", "-m", "app.ai_worker_main", "--shard-id", "0", "--worker-id", "ai-worker-0", "--detector", "debug"]
+      MODAL_YOLO_ENDPOINT_URL: ${MODAL_YOLO_ENDPOINT_URL:-}
+    command: ["python", "-m", "app.ai_worker_main", "--shard-id", "0", "--worker-id", "ai-worker-0", "--detector", "modal", "--yolo-classes", "person,car", "--confidence", "0.35", "--modal-timeout-seconds", "30"]
     restart: unless-stopped
 
   ai-video-ingest:

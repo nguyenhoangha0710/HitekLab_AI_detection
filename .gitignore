@@ -9,8 +9,11 @@ __pycache__/
 .ruff_cache/
 
 # Virtual environments and local env
+.venv*/
 .venv/
+venv*/
 venv/
+env*/
 env/
 .env
 .env.*
@@ -23,6 +26,7 @@ Thumbs.db
 
 # Jupyter runtime artifacts
 .ipynb_checkpoints/
+*.ipynb_checkpoints/
 
 # Office temporary files
 ~$*
@@ -32,8 +36,23 @@ Thumbs.db
 *.pt
 *.onnx
 *.engine
+*.weights
+*.tflite
 
 # Local runtime output
 runs/
 logs/
 *.log
+output/
+outputs/
+tmp/
+temp/
+
+# Modal/local cloud tool cache
+.modal/
+
+# Media files generated during experiments
+*.avi
+*.mkv
+*.mov
+*.webm

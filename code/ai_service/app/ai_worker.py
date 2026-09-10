@@ -2,7 +2,7 @@ import logging
 import threading
 from typing import Optional
 
-from .detector import NoopPersonDetector, draw_detections
+from .detector import NoopPersonDetector, draw_detections, summarize_detections
 from .image_codec import draw_debug_overlay
 from .time_utils import utc_now
 
@@ -45,14 +45,18 @@ class AIWorker:
                 continue
 
             for index, job in enumerate(jobs, start=1):
-                # Điểm thay thế inference thật: hiện tại detector có thể là YOLO person.
-                detections = self.detector.detect(job.frame)
+                # Detector co the chay local YOLO hoac goi Modal endpoint.
+                if hasattr(self.detector, "detect_job"):
+                    detections = self.detector.detect_job(job)
+                else:
+                    detections = self.detector.detect(job.frame)
                 detected_frame = draw_detections(job.frame, detections)
-                label = "{} | worker {} | seq {} | persons {} | batch {}/{}".format(
+                detection_summary = summarize_detections(detections)
+                label = "{} | worker {} | seq {} | {} | batch {}/{}".format(
                     job.metadata.camera_id,
                     self.worker_id,
                     job.metadata.sequence_number,
-                    len(detections),
+                    detection_summary,
                     index,
                     len(jobs),
                 )
@@ -63,11 +67,11 @@ class AIWorker:
                     # Pub/Sub là cầu nối process Worker -> AI API -> WebSocket UI.
                     self.result_publisher.publish(result)
                 LOGGER.info(
-                    "AI worker %s wrote processed frame camera=%s seq=%s persons=%s batch=%s/%s",
+                    "AI worker %s wrote processed frame camera=%s seq=%s detections=%s batch=%s/%s",
                     self.worker_id,
                     job.metadata.camera_id,
                     job.metadata.sequence_number,
-                    len(detections),
+                    detection_summary,
                     index,
                     len(jobs),
                 )

@@ -87,18 +87,27 @@ $env:AI_REDIS_CLAIM_BATCH_SIZE="1"
 python -m app.video_ingest_main --config config.yaml
 ```
 
-Chay worker voi YOLO person detection:
+Chay worker voi YOLOv11 person + car detection tren Modal:
+
+Terminal Modal:
+
+```powershell
+cd D:\NguyenHoangHa_nam4\Internship\HitekLab
+modal serve code\ai_service\modal_yolo11_service.py
+```
+
+Copy URL endpoint `detect` cua Modal, roi chay worker local:
 
 ```powershell
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
-pip install -r requirements-yolo.txt
 $env:AI_QUEUE_BACKEND="redis"
 $env:AI_REDIS_URL="redis://localhost:6379/0"
 $env:AI_REDIS_NUM_SHARDS="1"
 $env:AI_REDIS_FRAME_BUFFER_SIZE="100"
 $env:AI_REDIS_CLAIM_BATCH_SIZE="1"
 $env:AI_PROCESSED_STREAM_BUFFER_SIZE="300"
-python -m app.ai_worker_main --shard-id 0 --worker-id ai-worker-0 --detector yolo --yolo-model yolov8n.pt --confidence 0.35 --device cpu
+$env:MODAL_YOLO_ENDPOINT_URL="https://...modal.run"
+python -m app.ai_worker_main --shard-id 0 --worker-id ai-worker-0 --detector modal --yolo-classes person,car --confidence 0.35
 ```
 
 ## Config Video Ingest

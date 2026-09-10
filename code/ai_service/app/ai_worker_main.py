@@ -17,8 +17,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-id", default=None, help="Optional worker id shown in processed frame overlay.")
     parser.add_argument("--poll-timeout-seconds", type=float, default=1.0)
     parser.add_argument("--max-frames", type=int, default=None, help="Optional test limit.")
-    parser.add_argument("--detector", default="debug", choices=["debug", "none", "noop", "yolo"], help="Person detector backend.")
-    parser.add_argument("--yolo-model", default="yolov8n.pt", help="Ultralytics YOLO model path/name.")
+    parser.add_argument("--detector", default="debug", choices=["debug", "none", "noop", "yolo", "modal"], help="Object detector backend.")
+    parser.add_argument("--yolo-model", default="yolo11n.pt", help="Ultralytics YOLO model path/name.")
+    parser.add_argument("--yolo-classes", default="person,car", help="Comma-separated COCO class names/ids, for example person,car or 0,2.")
+    parser.add_argument("--modal-endpoint-url", default=None, help="Modal YOLO HTTP endpoint URL. Defaults to MODAL_YOLO_ENDPOINT_URL.")
+    parser.add_argument("--modal-timeout-seconds", type=float, default=30.0, help="Timeout for Modal YOLO HTTP inference.")
     parser.add_argument("--confidence", type=float, default=0.35, help="YOLO confidence threshold.")
     parser.add_argument("--device", default=None, help="YOLO device, for example cpu, 0, cuda:0.")
     return parser.parse_args()
@@ -36,6 +39,9 @@ def main() -> None:
         model_path=args.yolo_model,
         confidence_threshold=args.confidence,
         device=args.device,
+        yolo_classes=args.yolo_classes,
+        modal_endpoint_url=args.modal_endpoint_url,
+        modal_timeout_seconds=args.modal_timeout_seconds,
     )
     stop_event = threading.Event()
 
