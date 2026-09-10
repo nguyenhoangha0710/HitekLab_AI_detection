@@ -52,7 +52,10 @@ temp/
 .modal/
 
 # Media files generated during experiments
+code/data/videos/*
 *.avi
+*.mp4
+*.dav
 *.mkv
 *.mov
 *.webm

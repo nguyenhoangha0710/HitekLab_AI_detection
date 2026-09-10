@@ -7,11 +7,14 @@ Camera video files
   -> FFmpeg camera simulators
   -> MediaMTX RTSP server
   -> Edge Gateway / Video Ingest
-  -> Modal /ingest
+  -> Modal /ws/ingest
   -> Modal Queue
   -> Modal YOLOv11 GPU Worker
-  -> Modal /results va /viewer
+  -> Modal Result Queue + Modal Dict latest result
+  -> Modal /ws/results va /viewer
 ```
+
+Flow nay chi dung cac primitive cua Modal cho queue/result.
 
 ## Local Docker Services
 
@@ -20,7 +23,7 @@ Camera video files
 | `mediamtx` | RTSP server noi bo, expose port `8554`. |
 | `camera1` | FFmpeg loop `dummy_video_1.mp4` va publish len `rtsp://mediamtx:8554/camera1`. |
 | `camera2` | FFmpeg loop `dummy_video_2.mp4` va publish len `rtsp://mediamtx:8554/camera2`. |
-| `edge-gateway` | Doc RTSP, tao `FrameJob`, gui frame len Modal `/ingest`. |
+| `edge-gateway` | Doc RTSP, tao `FrameJob`, gui frame len Modal `/ws/ingest` bang WebSocket. |
 
 ## Run
 
@@ -44,6 +47,13 @@ Terminal 2: chay Edge Gateway local.
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab
 $env:MODAL_INGEST_URL="https://xxx--api-dev.modal.run/ingest"
 docker compose up --build
+```
+
+Docker mac dinh dung `MODAL_TRANSPORT=websocket`. Neu ban set URL dang
+`https://xxx--api-dev.modal.run/ingest`, Edge Gateway se tu chuyen thanh:
+
+```text
+wss://xxx--api-dev.modal.run/ingest
 ```
 
 Mo viewer tren Modal:
@@ -73,6 +83,7 @@ Docker network khong dung `localhost` de cac container goi nhau. Vi vay:
 RTSP camera1=rtsp://mediamtx:8554/camera1
 RTSP camera2=rtsp://mediamtx:8554/camera2
 MODAL_INGEST_URL=https://xxx--api-dev.modal.run/ingest
+MODAL_WS_URL=wss://xxx--api-dev.modal.run/ingest
 ```
 
 Config RTSP cho container nam o:
@@ -81,35 +92,26 @@ Config RTSP cho container nam o:
 code/ai_service/config.docker.yaml
 ```
 
-Config local van giu o:
-
-```text
-code/ai_service/config.yaml
-```
-
 ## Modal Queue Flow
 
-Modal AI Server trong `code/ai_service/modal_yolo11_service.py` co:
-
 ```text
-POST /ingest
+WebSocket /ws/ingest
   -> validate FramePacket
-  -> put payload vao Modal Queue
-  -> spawn ModalYoloQueueWorker.process_next()
-  -> tra 202 accepted cho Edge
+  -> put payload vao Modal Queue FIFO chung
+  -> spawn ModalYoloQueueWorker theo chu ky frame
 
 ModalYoloQueueWorker
   -> load YOLOv11 mot lan bang @modal.enter
-  -> pop frame tu Modal Queue
+  -> get frame tu Modal Queue
   -> detect person/car tren GPU T4
   -> ve bbox len frame
   -> luu latest result vao Modal Dict
+  -> put result vao Modal Result Queue
 
-GET /results
-  -> tra latest result cua cac camera
-
-GET /viewer
-  -> polling /results de hien thi frame da xu ly
+WebSocket /ws/results
+  -> gui latest snapshot tu Modal Dict khi viewer vua ket noi
+  -> doc Modal Result Queue
+  -> push frame da ve bbox xuong browser
 ```
 
 ## Realtime Defaults
@@ -125,4 +127,5 @@ jpeg_quality: 70-80
 confidence: 0.25-0.35
 ```
 
-Neu `target_fps` cao hon toc do Modal worker xu ly, queue se backlog va viewer se lag.
+Neu `target_fps` cao hon toc do Modal worker xu ly, Modal Queue se backlog va
+viewer se lag.

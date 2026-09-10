@@ -38,8 +38,8 @@ class AIWorker:
         LOGGER.info("AI worker %s started for shard %s", self.worker_id, self.shard_id)
         self._recover_processing()
         while not self.stop_event.is_set():
-            # Claim camera/frame từ Redis Broker. Với Redis, batch size được điều khiển
-            # bởi AI_REDIS_CLAIM_BATCH_SIZE để giữ công bằng giữa các camera.
+            # Claim camera/frame từ broker hiện tại. Với rollback này, local API dùng
+            # memory broker; Modal cloud dùng Modal Queue trong modal_yolo11_service.py.
             jobs = self._claim_next_batch()
             if not jobs:
                 continue
@@ -64,7 +64,6 @@ class AIWorker:
                 # Result Store giữ latest/processed stream để debug và phục hồi viewer.
                 result = self.result_store.update(job, processed_frame, utc_now(), self.worker_id, self.shard_id)
                 if self.result_publisher is not None:
-                    # Pub/Sub là cầu nối process Worker -> AI API -> WebSocket UI.
                     self.result_publisher.publish(result)
                 LOGGER.info(
                     "AI worker %s wrote processed frame camera=%s seq=%s detections=%s batch=%s/%s",
@@ -78,8 +77,7 @@ class AIWorker:
 
             latest = jobs[-1]
             try:
-                # Báo broker đã xử lý xong để broker xóa processing state
-                # và requeue camera nếu vẫn còn frame hoặc có frame mới đến.
+                # Báo broker đã xử lý xong để broker xóa processing state.
                 self.frame_queue.complete(
                     latest.metadata.camera_id,
                     latest.metadata.sequence_number,

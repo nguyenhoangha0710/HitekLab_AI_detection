@@ -1,7 +1,5 @@
 import base64
-import json
 import logging
-from typing import Optional
 
 from .result_store import ProcessedFrame
 from .time_utils import to_iso_utc
@@ -35,35 +33,5 @@ class NoopResultPublisher:
         return
 
 
-class RedisResultPublisher:
-    """Publish kết quả worker lên Redis Pub/Sub cho AI API subscribe."""
-
-    def __init__(self, redis_url: str, key_prefix: str = "ai", channel_name: Optional[str] = None) -> None:
-        import redis
-
-        self.redis_url = redis_url
-        self.key_prefix = key_prefix.rstrip(":")
-        self.channel_name = channel_name or "{}:processed_frames:pubsub".format(self.key_prefix)
-        self._redis = redis.Redis.from_url(redis_url, decode_responses=False)
-        self._redis.ping()
-
-    def publish(self, frame: ProcessedFrame) -> None:
-        # Worker và AI API là hai process khác nhau, nên dùng Redis Pub/Sub
-        # làm kênh realtime trung gian trước khi AI API push xuống WebSocket.
-        payload = json.dumps(processed_frame_to_message(frame), ensure_ascii=False).encode("utf-8")
-        subscriber_count = self._redis.publish(self.channel_name, payload)
-        LOGGER.info(
-            "Published processed frame camera=%s seq=%s redis_subscribers=%s",
-            frame.metadata.camera_id,
-            frame.metadata.sequence_number,
-            subscriber_count,
-        )
-
-    def close(self) -> None:
-        self._redis.close()
-
-
 def build_result_publisher(config):
-    if config.backend == "redis":
-        return RedisResultPublisher(config.redis_url, config.redis_key_prefix)
     return NoopResultPublisher()

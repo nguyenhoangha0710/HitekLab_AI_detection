@@ -41,8 +41,7 @@ class _CameraQueueStats:
 class FrameQueueManager:
     """In-memory latest-frame store plus fair pending-camera queue.
 
-    This backend is intentionally small for local tests. Redis backend keeps a
-    configurable latest-frame buffer per camera for tracker-friendly batches.
+    This backend is intentionally small for local tests and old local demos.
     """
 
     def __init__(self) -> None:

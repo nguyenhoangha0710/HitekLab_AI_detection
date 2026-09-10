@@ -19,7 +19,7 @@ class VideoIngestWorker:
     """Đọc RTSP cho một camera và đưa frame đã chuẩn hóa vào Frame Broker.
 
     Reader thread luôn đọc RTSP liên tục để tránh dồn buffer. Sampler loop mới
-    là nơi điều chỉnh target_fps và quyết định frame nào được đưa vào Redis.
+    là nơi điều chỉnh target_fps và quyết định frame nào được gửi sang AI Server.
     """
 
     def __init__(
@@ -78,7 +78,7 @@ class VideoIngestWorker:
                     continue
 
                 # Chuyển dữ liệu từ latest-frame slot sang FrameJob.
-                # Đây là điểm frame chính thức đi từ Video Ingest vào Redis Broker.
+                # Đây là điểm frame chính thức đi từ Video Ingest sang sender/broker.
                 job = self._build_job(frame, frame_time)
                 summary = self.frame_queue.enqueue(job)
                 emitted += 1
@@ -124,7 +124,7 @@ class VideoIngestWorker:
 
             with self._frame_condition:
                 # latest-frame slot chỉ có 1 phần tử: frame mới ghi đè frame cũ.
-                # Frame bị ghi đè ở đây là sampling/overwrite, không phải Redis drop.
+                # Frame bị ghi đè ở đây là sampling/overwrite trong latest slot nội bộ.
                 self._latest_decoded_sequence += 1
                 self._latest_frame = frame
                 self._latest_frame_time = utc_now()

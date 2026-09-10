@@ -8,13 +8,15 @@ import modal
 
 
 APP_NAME = "hitek-yolo11-async-ai-server"
-FRAME_QUEUE_NAME = "hitek-yolo11-frame-queue"
-STATE_DICT_NAME = "hitek-yolo11-state"
+FRAME_QUEUE_NAME = "hitek-yolo11-ws-frame-queue-v2"
+RESULT_QUEUE_NAME = "hitek-yolo11-ws-result-queue-v2"
+STATE_DICT_NAME = "hitek-yolo11-ws-state-v2"
 DEFAULT_MODEL = "yolo11n.pt"
 DEFAULT_CONFIDENCE = 0.35
 DEFAULT_IMAGE_SIZE = 640
 MAX_WORKER_DRAIN = 32
 WORKER_SPAWN_EVERY_N_FRAMES = 4
+API_WEBSOCKET_TIMEOUT_SECONDS = 3600
 COCO_CLASS_IDS: Dict[str, int] = {
     "person": 0,
     "car": 2,
@@ -25,15 +27,26 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("libgl1", "libglib2.0-0")
     .pip_install("fastapi[standard]", "opencv-python-headless", "numpy", "ultralytics")
+    .env({"YOLO_CONFIG_DIR": "/tmp/Ultralytics"})
 )
 
 app = modal.App(APP_NAME)
 frame_queue = modal.Queue.from_name(FRAME_QUEUE_NAME, create_if_missing=True)
+result_queue = modal.Queue.from_name(RESULT_QUEUE_NAME, create_if_missing=True)
 state_store = modal.Dict.from_name(STATE_DICT_NAME, create_if_missing=True)
 
 
 def utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def latest_results_snapshot() -> List[dict]:
+    values = []
+    for key, value in state_store.items():
+        if str(key).startswith("latest:"):
+            values.append(value)
+    values.sort(key=lambda item: str(item.get("camera_id", "")))
+    return values
 
 
 def parse_class_ids(value) -> List[int]:
@@ -154,6 +167,10 @@ class ModalYoloQueueWorker:
                 "last_processed_at": result.get("modal_processed_at"),
                 "last_detection_count": result.get("detection_count"),
             }
+        try:
+            result_queue.put(result, block=False)
+        except queue.Full:
+            pass
         return result
 
     @modal.method()
@@ -171,12 +188,8 @@ class ModalYoloQueueWorker:
             except queue.Empty:
                 break
 
-            # Modal Queue co the tra None khi worker duoc spawn nhung queue vua het.
-            # Truong hop nay khong phai frame loi, chi la khong con viec de xu ly.
             if payload is None:
                 break
-
-            # Bao ve worker truoc payload khong dung contract FramePacket.
             if not isinstance(payload, dict):
                 skipped += 1
                 continue
@@ -192,65 +205,154 @@ class ModalYoloQueueWorker:
         }
 
 
-@app.function(image=image, timeout=120)
+@app.function(image=image, timeout=API_WEBSOCKET_TIMEOUT_SECONDS)
+@modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def api():
-    from fastapi import FastAPI, HTTPException
+    import asyncio
+
+    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
     from fastapi.responses import HTMLResponse
 
     web = FastAPI(title="Hitek Modal YOLOv11 Async AI Server")
 
-    @web.get("/health")
-    def health():
-        return {
-            "status": "ok",
-            "service": APP_NAME,
-            "queue": FRAME_QUEUE_NAME,
-            "state": STATE_DICT_NAME,
-            "timestamp": utc_iso(),
-        }
-
-    @web.post("/ingest", status_code=202)
-    def ingest(payload: dict):
+    def normalize_payload(payload: dict) -> dict:
         required = ["camera_id", "frame_id", "sequence_number", "image_b64"]
         missing = [key for key in required if key not in payload]
         if missing:
-            raise HTTPException(status_code=422, detail="Missing required fields: {}".format(", ".join(missing)))
+            raise ValueError("Missing required fields: {}".format(", ".join(missing)))
 
         payload["modal_received_at"] = utc_iso()
         payload.setdefault("classes", ["person", "car"])
         payload.setdefault("confidence", DEFAULT_CONFIDENCE)
         payload.setdefault("imgsz", DEFAULT_IMAGE_SIZE)
         payload.setdefault("model", DEFAULT_MODEL)
+        payload["sequence_number"] = int(payload["sequence_number"])
+        return payload
 
+    async def spawn_worker_async() -> None:
         try:
-            frame_queue.put(payload, block=False)
-        except queue.Full as exc:
-            raise HTTPException(status_code=503, detail="Modal frame queue is full") from exc
+            await ModalYoloQueueWorker(model_name=DEFAULT_MODEL).process_next.spawn.aio(MAX_WORKER_DRAIN)
+        except Exception:
+            # Worker spawn loi khong duoc lam dut WebSocket ingest. Frame van da
+            # nam trong Modal Queue, frame sau se tiep tuc kich hoat worker.
+            pass
 
-        camera_id = payload["camera_id"]
+    async def enqueue_payload_async(payload: dict) -> bool:
+        await frame_queue.put.aio(payload, block=False)
         sequence_number = int(payload["sequence_number"])
         worker_spawned = sequence_number <= 1 or sequence_number % WORKER_SPAWN_EVERY_N_FRAMES == 0
         if worker_spawned:
-            # Khong spawn GPU worker cho tung frame de giam overhead tren Modal.
-            # Mot worker se drain nhieu frame lien tiep trong queue.
+            # Khong await spawn trong receive loop, neu khong TCP/WebSocket bi
+            # backpressure va Edge Gateway se gui frame cham hon target_fps.
+            asyncio.create_task(spawn_worker_async())
+        return worker_spawned
+
+    def enqueue_payload(payload: dict) -> bool:
+        frame_queue.put(payload, block=False)
+        sequence_number = int(payload["sequence_number"])
+        worker_spawned = sequence_number <= 1 or sequence_number % WORKER_SPAWN_EVERY_N_FRAMES == 0
+        if worker_spawned:
             ModalYoloQueueWorker(model_name=DEFAULT_MODEL).process_next.spawn(MAX_WORKER_DRAIN)
+        return worker_spawned
+
+    @web.get("/health")
+    def health():
+        return {
+            "status": "ok",
+            "service": APP_NAME,
+            "queue_backend": "modal_queue",
+            "frame_queue": FRAME_QUEUE_NAME,
+            "result_queue": RESULT_QUEUE_NAME,
+            "state": STATE_DICT_NAME,
+            "timestamp": utc_iso(),
+        }
+
+    @web.get("/queues")
+    def queues():
+        return {
+            "backend": "modal_queue",
+            "message": "Modal Queue does not expose per-camera queue statistics.",
+            "timestamp": utc_iso(),
+        }
+
+    @web.post("/ingest", status_code=202)
+    def ingest(payload: dict):
+        try:
+            payload = normalize_payload(payload)
+            worker_spawned = enqueue_payload(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except queue.Full as exc:
+            raise HTTPException(status_code=503, detail="Modal frame queue is full") from exc
+
         return {
             "status": "accepted",
-            "camera_id": camera_id,
+            "camera_id": payload["camera_id"],
             "frame_id": payload["frame_id"],
-            "sequence_number": sequence_number,
+            "sequence_number": payload["sequence_number"],
             "worker_spawned": worker_spawned,
             "modal_received_at": payload["modal_received_at"],
         }
 
+    @web.websocket("/ingest")
+    @web.websocket("/ws/ingest")
+    async def websocket_ingest(websocket: WebSocket):
+        await websocket.accept()
+        accepted = 0
+        try:
+            while True:
+                payload = await websocket.receive_json()
+                try:
+                    payload = normalize_payload(payload)
+                    worker_spawned = await enqueue_payload_async(payload)
+                except Exception as exc:
+                    if isinstance(payload, dict) and payload.get("ack"):
+                        await websocket.send_json({"type": "error", "detail": str(exc), "timestamp": utc_iso()})
+                    continue
+
+                accepted += 1
+                if payload.get("ack"):
+                    await websocket.send_json(
+                        {
+                            "type": "accepted",
+                            "camera_id": payload["camera_id"],
+                            "frame_id": payload["frame_id"],
+                            "sequence_number": payload["sequence_number"],
+                            "worker_spawned": worker_spawned,
+                            "accepted": accepted,
+                            "timestamp": utc_iso(),
+                        }
+                    )
+        except WebSocketDisconnect:
+            return
+
+    @web.websocket("/ws/results")
+    async def websocket_results(websocket: WebSocket):
+        await websocket.accept()
+        try:
+            snapshot = await asyncio.to_thread(latest_results_snapshot)
+            for result in snapshot:
+                await websocket.send_json({"type": "frame", "frame": result, "snapshot": True, "timestamp": utc_iso()})
+
+            while True:
+                try:
+                    result = await result_queue.get.aio(block=False)
+                except queue.Empty:
+                    await asyncio.sleep(0.05)
+                    continue
+
+                if result is None:
+                    await asyncio.sleep(0.05)
+                    continue
+
+                await websocket.send_json({"type": "frame", "frame": result, "timestamp": utc_iso()})
+        except WebSocketDisconnect:
+            return
+
     @web.get("/results")
     def results():
-        values = []
-        for key, value in state_store.items():
-            if str(key).startswith("latest:"):
-                values.append(value)
-        values.sort(key=lambda item: str(item.get("camera_id", "")))
+        values = latest_results_snapshot()
         return {"value": values, "count": len(values), "timestamp": utc_iso()}
 
     @web.get("/results/{camera_id}")
@@ -278,10 +380,12 @@ def api():
                 </style>
               </head>
               <body>
-                <h1>Modal YOLOv11 Async Result Viewer</h1>
+                <h1>Modal YOLOv11 Live Result Viewer</h1>
+                <p id="status" style="margin: -8px 16px 0; color: #7dd3fc; font-size: 13px;">Connecting result WebSocket...</p>
                 <main id="grid"></main>
                 <script>
                   const grid = document.getElementById("grid");
+                  const status = document.getElementById("status");
                   const sections = new Map();
                   function ensure(frame) {
                     let state = sections.get(frame.camera_id);
@@ -296,18 +400,35 @@ def api():
                     sections.set(frame.camera_id, state);
                     return state;
                   }
-                  async function refresh() {
-                    const res = await fetch("/results?t=" + Date.now());
-                    const data = await res.json();
-                    for (const frame of data.value) {
-                      const s = ensure(frame);
-                      s.title.textContent = frame.camera_id;
-                      s.meta.textContent = `seq ${frame.sequence_number} | detections ${frame.detection_count} | inference ${frame.inference_ms}ms | ${frame.modal_processed_at}`;
-                      if (frame.image_b64) s.img.src = "data:image/jpeg;base64," + frame.image_b64;
-                    }
+                  function render(frame) {
+                    const s = ensure(frame);
+                    s.title.textContent = frame.camera_id;
+                    s.meta.textContent = `seq ${frame.sequence_number} | detections ${frame.detection_count} | inference ${frame.inference_ms}ms | ${frame.modal_processed_at}`;
+                    if (frame.image_b64) s.img.src = "data:image/jpeg;base64," + frame.image_b64;
                   }
-                  setInterval(refresh, 1000);
-                  refresh();
+                  function connectResults() {
+                    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+                    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/results`);
+                    socket.onopen = () => {
+                      status.textContent = "Result WebSocket connected. Waiting for processed frames...";
+                    };
+                    socket.onmessage = (event) => {
+                      const message = JSON.parse(event.data);
+                      if (message.type === "frame") {
+                        status.textContent = `Receiving live processed frames - ${message.timestamp}`;
+                        render(message.frame);
+                      }
+                    };
+                    socket.onclose = () => {
+                      status.textContent = "Result WebSocket disconnected. Reconnecting...";
+                      setTimeout(connectResults, 1000);
+                    };
+                    socket.onerror = () => {
+                      status.textContent = "Result WebSocket error.";
+                      socket.close();
+                    };
+                  }
+                  connectResults();
                 </script>
               </body>
             </html>

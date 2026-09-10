@@ -7,6 +7,7 @@ from typing import List
 
 from .config import load_video_ingest_config
 from .modal_frame_sender import ModalFrameSender
+from .modal_websocket_frame_sender import ModalWebSocketFrameSender
 from .video_ingest import VideoIngestWorker
 
 
@@ -14,6 +15,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Edge Gateway: read RTSP and send frames to Modal AI Server.")
     parser.add_argument("--config", default="config.yaml", help="Path to edge/video ingest YAML config.")
     parser.add_argument("--modal-ingest-url", default=os.getenv("MODAL_INGEST_URL", ""), help="Modal /ingest endpoint URL.")
+    parser.add_argument("--modal-ws-url", default=os.getenv("MODAL_WS_URL", ""), help="Modal /ws/ingest endpoint URL.")
+    parser.add_argument("--transport", choices=["websocket", "http"], default=os.getenv("MODAL_TRANSPORT", "websocket"))
     parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("MODAL_INGEST_TIMEOUT_SECONDS", "10")))
     parser.add_argument("--confidence", type=float, default=float(os.getenv("YOLO_CONFIDENCE", "0.35")))
     parser.add_argument("--yolo-classes", default=os.getenv("YOLO_CLASSES", "person,car"))
@@ -26,13 +29,22 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
     args = parse_args()
     ingest_config = load_video_ingest_config(args.config)
-    sender = ModalFrameSender(
-        ingest_url=args.modal_ingest_url,
-        timeout_seconds=args.timeout_seconds,
-        confidence_threshold=args.confidence,
-        yolo_classes=args.yolo_classes,
-        tenant_id=args.tenant_id,
-    )
+    if args.transport == "websocket":
+        sender = ModalWebSocketFrameSender(
+            websocket_url=args.modal_ws_url or args.modal_ingest_url,
+            timeout_seconds=args.timeout_seconds,
+            confidence_threshold=args.confidence,
+            yolo_classes=args.yolo_classes,
+            tenant_id=args.tenant_id,
+        )
+    else:
+        sender = ModalFrameSender(
+            ingest_url=args.modal_ingest_url,
+            timeout_seconds=args.timeout_seconds,
+            confidence_threshold=args.confidence,
+            yolo_classes=args.yolo_classes,
+            tenant_id=args.tenant_id,
+        )
     stop_event = threading.Event()
 
     def stop_handler(signum, frame) -> None:

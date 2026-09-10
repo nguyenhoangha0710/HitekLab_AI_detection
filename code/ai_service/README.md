@@ -1,21 +1,22 @@
 # AI Service / Edge Gateway Prototype
 
-He thong hien tai da chuyen sang flow B:
+Flow hien tai da rollback ve ban WebSocket Modal don gian:
 
 ```text
 Camera LAN / Camera Simulator
   -> RTSP
   -> Edge Gateway / Video Ingest
-  -> Modal /ingest
+  -> Modal /ws/ingest
   -> Modal Queue
   -> Modal YOLOv11 GPU Worker
-  -> Modal Dict Result Store
-  -> Modal /results va /viewer
+  -> Modal Dict latest result + Modal Result Queue
+  -> Modal /ws/results
+  -> /viewer
 ```
 
-Local khong con chay AI Worker YOLO trong duong realtime chinh. Local chi doc RTSP,
-sampling FPS, tao metadata va gui frame len Modal. Modal la AI Server cloud chinh:
-nhan frame, queue/buffer, chay YOLOv11 GPU va luu result.
+Local khong chay YOLO trong duong realtime chinh. Local chi doc RTSP, sampling
+FPS, tao metadata va gui frame len Modal. Modal la AI Server cloud: nhan frame,
+dua vao Modal Queue, chay YOLOv11 GPU va push result ve viewer qua WebSocket.
 
 ## Thanh Phan Chinh
 
@@ -23,8 +24,9 @@ nhan frame, queue/buffer, chay YOLOv11 GPU va luu result.
 | --- | --- |
 | `app/video_ingest.py` | Doc RTSP, sampling, resize, encode JPEG, tao `FrameJob`. |
 | `app/edge_gateway_main.py` | Entry point Edge Gateway local. |
-| `app/modal_frame_sender.py` | Gui `FrameJob` len Modal `/ingest`. |
-| `modal_yolo11_service.py` | Modal AI Server: `/ingest`, Queue, YOLO Worker, `/results`, `/viewer`. |
+| `app/modal_websocket_frame_sender.py` | Gui `FrameJob` len Modal `/ws/ingest` bang WebSocket. |
+| `app/modal_frame_sender.py` | Gui `FrameJob` len Modal `/ingest` bang HTTP fallback. |
+| `modal_yolo11_service.py` | Modal AI Server: `/ws/ingest`, Modal Queue, YOLO Worker, `/ws/results`, `/viewer`. |
 | `config.yaml` | Config chay local. |
 | `config.docker.yaml` | Config chay trong Docker network. |
 
@@ -52,6 +54,13 @@ $env:MODAL_INGEST_URL="https://xxx--api-dev.modal.run/ingest"
 docker compose up --build
 ```
 
+Docker mac dinh dung WebSocket. URL `/ingest` se duoc Edge Gateway tu chuyen
+thanh:
+
+```text
+wss://xxx--api-dev.modal.run/ingest
+```
+
 Mo viewer:
 
 ```text
@@ -73,12 +82,15 @@ python -m app.edge_gateway_main --config config.yaml
 ```text
 GET  /health
 POST /ingest
+WS   /ws/ingest
+WS   /ws/results
+GET  /queues
 GET  /results
 GET  /results/{camera_id}
 GET  /viewer
 ```
 
-`POST /ingest` nhan payload gom metadata va JPEG base64:
+`WS /ws/ingest` va `POST /ingest` nhan payload gom metadata va JPEG base64:
 
 ```json
 {
@@ -95,18 +107,9 @@ GET  /viewer
 }
 ```
 
-Endpoint tra nhanh:
-
-```json
-{
-  "status": "accepted",
-  "camera_id": "camera-id",
-  "frame_id": "camera-id-000000000001",
-  "sequence_number": 1
-}
-```
-
-YOLO xu ly async trong Modal worker, result doc qua `/results`.
+YOLO xu ly async trong Modal worker. Viewer nhan frame da xu ly qua
+`/ws/results`; `/results` chi la endpoint debug latest result. `/queues` chi bao
+ten Modal Queue vi Modal Queue khong expose thong ke per-camera.
 
 ## Test
 
@@ -114,6 +117,3 @@ YOLO xu ly async trong Modal worker, result doc qua `/results`.
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
 python -m unittest discover -s tests
 ```
-
-Redis tests cu van ton tai cho prototype broker local, nhung flow B realtime khong
-can Redis local.

@@ -6,5 +6,4 @@ opencv-python-headless
 numpy
 pydantic
 httpx
-redis
 pyyaml

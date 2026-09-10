@@ -9,12 +9,6 @@ import yaml
 @dataclass(frozen=True)
 class QueueBackendConfig:
     backend: str
-    redis_url: str
-    redis_key_prefix: str
-    redis_num_shards: int
-    redis_latest_ttl_seconds: int
-    redis_frame_buffer_size: int
-    redis_claim_batch_size: int
     processed_stream_buffer_size: int
 
 
@@ -44,12 +38,6 @@ class VideoIngestConfig:
 def load_queue_config() -> QueueBackendConfig:
     return QueueBackendConfig(
         backend=os.getenv("AI_QUEUE_BACKEND", "memory").strip().lower(),
-        redis_url=os.getenv("AI_REDIS_URL", "redis://localhost:6379/0"),
-        redis_key_prefix=os.getenv("AI_REDIS_KEY_PREFIX", "ai"),
-        redis_num_shards=max(1, int(os.getenv("AI_REDIS_NUM_SHARDS", "4"))),
-        redis_latest_ttl_seconds=max(1, int(os.getenv("AI_REDIS_LATEST_TTL_SECONDS", "10"))),
-        redis_frame_buffer_size=max(1, int(os.getenv("AI_REDIS_FRAME_BUFFER_SIZE", "5"))),
-        redis_claim_batch_size=max(1, int(os.getenv("AI_REDIS_CLAIM_BATCH_SIZE", "1"))),
         processed_stream_buffer_size=max(1, int(os.getenv("AI_PROCESSED_STREAM_BUFFER_SIZE", "120"))),
     )
 

@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import threading
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -64,75 +63,6 @@ class WebSocketResultManager:
 
 
 websocket_results = WebSocketResultManager()
-_redis_subscriber_stop = threading.Event()
-_redis_subscriber_thread = None
-_redis_subscriber_loop = None
-
-
-def _result_pubsub_channel() -> str:
-    return "{}:processed_frames:pubsub".format(queue_config.redis_key_prefix.rstrip(":"))
-
-
-def _run_redis_result_subscriber() -> None:
-    """Subscribe Redis Pub/Sub rồi forward kết quả worker sang WebSocket clients."""
-    import redis
-
-    client = redis.Redis.from_url(queue_config.redis_url, decode_responses=False)
-    pubsub = client.pubsub(ignore_subscribe_messages=True)
-    channel = _result_pubsub_channel()
-    pubsub.subscribe(channel)
-    LOGGER.info("Redis result subscriber listening on %s", channel)
-    try:
-        while not _redis_subscriber_stop.is_set():
-            message = pubsub.get_message(timeout=1.0)
-            if not message or message.get("type") != "message":
-                continue
-            data = message.get("data")
-            if isinstance(data, bytes):
-                payload = data.decode("utf-8")
-            else:
-                payload = str(data)
-            if _redis_subscriber_loop is not None:
-                try:
-                    event = json.loads(payload)
-                    camera_id = event.get("camera_id")
-                    sequence_number = event.get("sequence_number")
-                except json.JSONDecodeError:
-                    camera_id = "unknown"
-                    sequence_number = "unknown"
-                future = asyncio.run_coroutine_threadsafe(websocket_results.broadcast_text(payload), _redis_subscriber_loop)
-                delivered_count = future.result(timeout=2.0)
-                LOGGER.info(
-                    "Broadcast processed frame camera=%s seq=%s websocket_clients=%s",
-                    camera_id,
-                    sequence_number,
-                    delivered_count,
-                )
-    finally:
-        pubsub.close()
-        client.close()
-
-
-@app.on_event("startup")
-async def start_result_subscriber() -> None:
-    global _redis_subscriber_loop, _redis_subscriber_thread
-    if queue_config.backend != "redis":
-        return
-    _redis_subscriber_loop = asyncio.get_running_loop()
-    _redis_subscriber_stop.clear()
-    _redis_subscriber_thread = threading.Thread(
-        target=_run_redis_result_subscriber,
-        name="redis-result-subscriber",
-        daemon=True,
-    )
-    _redis_subscriber_thread.start()
-
-
-@app.on_event("shutdown")
-async def stop_result_subscriber() -> None:
-    _redis_subscriber_stop.set()
-    if _redis_subscriber_thread is not None:
-        _redis_subscriber_thread.join(timeout=2.0)
 
 
 def error_response(code: str, message: str, request_id: Optional[str], status_code: int = 400, details=None) -> JSONResponse:
@@ -161,9 +91,6 @@ def ready():
         "status": "READY",
         "service": "ai-service",
         "queue_backend": queue_config.backend,
-        "redis_num_shards": queue_config.redis_num_shards if queue_config.backend == "redis" else None,
-        "redis_frame_buffer_size": queue_config.redis_frame_buffer_size if queue_config.backend == "redis" else None,
-        "redis_claim_batch_size": queue_config.redis_claim_batch_size if queue_config.backend == "redis" else None,
         "processed_stream_buffer_size": queue_config.processed_stream_buffer_size,
         "timestamp": to_iso_utc(utc_now()),
     }
