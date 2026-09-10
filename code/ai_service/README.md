@@ -1,160 +1,161 @@
 # AI Service
 
-AI Service phase 1 nhận frame từ Video Service qua HTTP multipart, decode ảnh, đưa frame vào queue theo từng `camera_id` và cung cấp viewer để consume frame từ queue. Queue đầy thì frame cũ nhất bị drop để giữ dữ liệu mới hơn cho realtime.
+AI Service hien tai so huu truc tiep Video Ingest Layer de doc RTSP realtime, tao `FrameJob` va day vao Frame Broker. Duong HTTP multipart van duoc giu lai de test contract/debug, nhung khong con la pipeline realtime chinh.
 
-Pipeline:
+## Pipeline Moi
 
 ```text
-RTSP Simulator
-    -> Video Service
-    -> POST /api/v1/ai/frames
-    -> AI Service
-    -> per-camera frame queue
-    -> /viewer consume frame from queue
+Camera Simulator / Camera thật
+    -> RTSP
+    -> AI Service Video Ingest Layer
+    -> Frame Broker Redis
+    -> AI Worker
+    -> Result Store + Redis Pub/Sub
+    -> AI API WebSocket
+    -> /viewer
 ```
 
-## Chạy service
+Trong pipeline moi:
+
+- Video Ingest Layer ket noi RTSP, decode frame, sampling FPS, resize va tao metadata.
+- Frame Broker giu frame buffer rieng theo tung `camera_id`, shard theo `camera_id`.
+- AI Worker chi tap trung xu ly inference/tracking/rule.
+- Viewer nhan frame da xu ly qua WebSocket, khong polling `/next.jpg`.
+
+## Chay Full Pipeline Moi Bang Docker
+
+Toan bo Redis, RTSP simulator, AI API, AI Worker va Video Ingest da duoc gom vao
+`docker-compose.yml` o root project.
 
 ```powershell
-cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
-uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+cd D:\NguyenHoangHa_nam4\Internship\HitekLab
+docker compose up --build
 ```
 
-## Chạy full pipeline
-
-Terminal 1: RTSP simulator.
-
-```powershell
-cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\video_service
-docker compose -f docker-compose.rtsp.yml up
-```
-
-Terminal 2: AI Service.
-
-```powershell
-cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
-uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
-```
-
-Terminal 3: Video Service gửi frame sang AI.
-
-```powershell
-cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\video_service
-python -m app.video_service_main --config config.yaml --sink http
-```
-
-Mở viewer:
+Mo viewer:
 
 ```text
 http://localhost:8001/viewer
 ```
 
-API kiểm tra:
+Dung he thong:
+
+```powershell
+docker compose down
+```
+
+## Chay Thu Cong Khi Can Debug
+
+Neu muon debug tung process khong qua Docker, chay Redis/RTSP rieng roi chay AI API,
+AI Worker va AI Video Ingest tu `code/ai_service`.
+
+AI API:
+
+```powershell
+cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
+$env:AI_QUEUE_BACKEND="redis"
+$env:AI_REDIS_URL="redis://localhost:6379/0"
+$env:AI_REDIS_NUM_SHARDS="1"
+$env:AI_REDIS_FRAME_BUFFER_SIZE="100"
+$env:AI_REDIS_CLAIM_BATCH_SIZE="1"
+$env:AI_PROCESSED_STREAM_BUFFER_SIZE="300"
+uvicorn app.main:app --host 0.0.0.0 --port 8001
+```
+
+AI Worker:
+
+```powershell
+cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
+$env:AI_QUEUE_BACKEND="redis"
+$env:AI_REDIS_URL="redis://localhost:6379/0"
+$env:AI_REDIS_NUM_SHARDS="1"
+$env:AI_REDIS_FRAME_BUFFER_SIZE="100"
+$env:AI_REDIS_CLAIM_BATCH_SIZE="1"
+$env:AI_PROCESSED_STREAM_BUFFER_SIZE="300"
+python -m app.ai_worker_main --shard-id 0 --worker-id ai-worker-0
+```
+
+AI Video Ingest Layer:
+
+```powershell
+cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
+$env:AI_QUEUE_BACKEND="redis"
+$env:AI_REDIS_URL="redis://localhost:6379/0"
+$env:AI_REDIS_NUM_SHARDS="1"
+$env:AI_REDIS_FRAME_BUFFER_SIZE="100"
+$env:AI_REDIS_CLAIM_BATCH_SIZE="1"
+python -m app.video_ingest_main --config config.yaml
+```
+
+Chay worker voi YOLO person detection:
+
+```powershell
+cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
+pip install -r requirements-yolo.txt
+$env:AI_QUEUE_BACKEND="redis"
+$env:AI_REDIS_URL="redis://localhost:6379/0"
+$env:AI_REDIS_NUM_SHARDS="1"
+$env:AI_REDIS_FRAME_BUFFER_SIZE="100"
+$env:AI_REDIS_CLAIM_BATCH_SIZE="1"
+$env:AI_PROCESSED_STREAM_BUFFER_SIZE="300"
+python -m app.ai_worker_main --shard-id 0 --worker-id ai-worker-0 --detector yolo --yolo-model yolov8n.pt --confidence 0.35 --device cpu
+```
+
+## Config Video Ingest
+
+File:
+
+```text
+code/ai_service/config.yaml
+```
+
+Thong so quan trong:
+
+```yaml
+video_ingest:
+  defaults:
+    target_fps: 15
+    frame_width: 640
+    frame_height: 360
+    jpeg_quality: 80
+```
+
+Muon live muot hon thi tang `target_fps`, nhung neu AI Worker khong xu ly kip thi Redis se drop frame cu trong buffer cua chinh camera do. Muon giam tai thi ha `frame_width/frame_height` va `jpeg_quality`.
+
+## API Kiem Tra
 
 ```text
 GET http://localhost:8001/health
 GET http://localhost:8001/ready
-GET http://localhost:8001/api/v1/ai/cameras
 GET http://localhost:8001/api/v1/ai/queues
-GET http://localhost:8001/api/v1/ai/cameras/{camera_id}/latest.jpg
-GET http://localhost:8001/api/v1/ai/cameras/{camera_id}/stream
+GET http://localhost:8001/api/v1/ai/results
+GET http://localhost:8001/api/v1/ai/debug/flow
+WS  ws://localhost:8001/ws/ai/results
 ```
 
-## Contract nhận frame
+## Duong HTTP Multipart Debug
 
-```http
-POST /api/v1/ai/frames
-Content-Type: multipart/form-data
-X-Correlation-ID: <uuid>
-```
-
-Multipart fields:
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `metadata` | JSON string | yes |
-| `image` | JPEG/PNG file | yes |
-
-Metadata hiện tại đồng bộ với Video Service:
-
-```json
-{
-  "frame_id": "550e8400-e29b-41d4-a716-446655440001-000000000030",
-  "camera_id": "550e8400-e29b-41d4-a716-446655440001",
-  "location_id": "550e8400-e29b-41d4-a716-446655440101",
-  "source_type": "RTSP",
-  "source_url": "rtsp://localhost:8554/camera1",
-  "timestamp": "2026-08-30T09:15:22.120Z",
-  "captured_at": "2026-08-30T09:15:22.120Z",
-  "received_at": "2026-08-30T09:15:22.120Z",
-  "sequence_number": 30,
-  "source_width": 640,
-  "source_height": 360,
-  "frame_width": 1280,
-  "frame_height": 720,
-  "target_fps": 10.0,
-  "encoding": "JPEG"
-}
-```
-
-Không dùng `session_id` và `loop_index`.
-
-## Queue behavior
-
-Hiện tại AI Service dùng queue trong RAM:
-
-```text
-camera_id -> queue frame riêng
-max_queue_size = 2
-queue đầy -> drop frame cũ nhất -> append frame mới
-```
-
-Endpoint nhận frame:
+Endpoint nay van ton tai de unit test hoac test contract voi service khac:
 
 ```text
 POST /api/v1/ai/frames
-    -> validate metadata
-    -> decode image
-    -> enqueue frame
-    -> trả 202 Accepted
 ```
 
-Viewer/stream consume frame:
-
-```text
-GET /api/v1/ai/cameras/{camera_id}/stream
-    -> pop frame khỏi queue
-    -> vẽ overlay debug
-    -> trả MJPEG frame cho browser
-```
-
-Vì viewer đang đóng vai trò debug consumer giống AI worker, frame đã hiển thị xong sẽ bị xóa khỏi queue. Sau này YOLO worker sẽ thay viewer làm consumer chính:
-
-```text
-queue -> YOLO inference -> AI_EVENT
-```
-
-Chỉ số queue:
-
-```json
-{
-  "camera_id": "550e8400-e29b-41d4-a716-446655440001",
-  "queue_size": 2,
-  "max_queue_size": 2,
-  "received_frames": 120,
-  "enqueued_frames": 120,
-  "dropped_frames": 30,
-  "consumed_frames": 88,
-  "last_enqueued_frame_id": "...",
-  "last_consumed_frame_id": "...",
-  "last_received_at": "2026-08-30T09:15:22.120Z",
-  "last_consumed_at": "2026-08-30T09:15:22.220Z"
-}
-```
+Pipeline realtime hien tai dung Video Ingest Layer noi bo cua AI Service de doc RTSP
+va day frame vao Redis Broker.
 
 ## Test
 
 ```powershell
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
 python -m unittest discover -s tests
+```
+
+Redis integration:
+
+```powershell
+cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
+$env:RUN_REDIS_TESTS="1"
+$env:AI_REDIS_URL="redis://localhost:6379/0"
+python -m unittest tests.test_redis_frame_queue
 ```

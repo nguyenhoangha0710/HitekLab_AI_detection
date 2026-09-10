@@ -43,19 +43,31 @@ class FrameAcceptedResponse(BaseModel):
 class CameraQueueSummary(BaseModel):
     camera_id: str
     location_id: str
+    shard_id: Optional[int] = None
     queue_size: int
     max_queue_size: int
+    buffered_frame_count: Optional[int] = None
+    frame_buffer_size: Optional[int] = None
+    claim_batch_size: Optional[int] = None
+    pending_camera_count: int
     received_frames: int
     enqueued_frames: int
     dropped_frames: int
     consumed_frames: int
+    dirty_requeues: int = 0
+    sequence_resets: int = 0
+    latest_frame_id: Optional[str] = None
     last_enqueued_frame_id: Optional[str] = None
     last_consumed_frame_id: Optional[str] = None
     last_received_at: Optional[str] = None
     last_consumed_at: Optional[str] = None
     sequence_number: Optional[int] = None
+    last_consumed_sequence_number: Optional[int] = None
     image_width: Optional[int] = None
     image_height: Optional[int] = None
+    is_pending: bool = False
+    is_processing: bool = False
+    is_dirty: bool = False
 
 
 class CameraFrameSummary(BaseModel):
@@ -65,5 +77,17 @@ class CameraFrameSummary(BaseModel):
     last_received_at: str
     sequence_number: int
     frame_count: int
+    image_width: int
+    image_height: int
+
+
+class ProcessedFrameSummary(BaseModel):
+    camera_id: str
+    location_id: str
+    frame_id: str
+    sequence_number: int
+    processed_at: str
+    worker_id: str
+    shard_id: int
     image_width: int
     image_height: int

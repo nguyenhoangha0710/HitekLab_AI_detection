@@ -1,7 +1,10 @@
 fastapi
 uvicorn
+websockets
 python-multipart
-opencv-python
+opencv-python-headless
 numpy
 pydantic
 httpx
+redis
+pyyaml

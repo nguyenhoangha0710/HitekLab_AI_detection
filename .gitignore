@@ -1,0 +1,39 @@
+reports/
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local env
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Jupyter runtime artifacts
+.ipynb_checkpoints/
+
+# Office temporary files
+~$*
+*.tmp
+
+# ML model weights / generated binaries
+*.pt
+*.onnx
+*.engine
+
+# Local runtime output
+runs/
+logs/
+*.log

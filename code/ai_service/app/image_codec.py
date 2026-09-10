@@ -4,6 +4,12 @@ import cv2
 import numpy as np
 
 
+def resize_frame(frame: np.ndarray, width: int, height: int) -> np.ndarray:
+    if frame.shape[1] == width and frame.shape[0] == height:
+        return frame
+    return cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+
+
 def decode_image(image_bytes: bytes) -> np.ndarray:
     array = np.frombuffer(image_bytes, dtype=np.uint8)
     frame = cv2.imdecode(array, cv2.IMREAD_COLOR)

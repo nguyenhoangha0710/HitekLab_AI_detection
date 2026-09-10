@@ -1,0 +1,26 @@
+video_ingest:
+  reconnect_interval_seconds: 3
+  read_retry_count: 3
+  log_every_n_frames: 30
+  defaults:
+    source_type: RTSP
+    target_fps: 15
+    frame_width: 640
+    frame_height: 360
+    encoding: JPEG
+    jpeg_quality: 80
+
+cameras:
+  - camera_id: "550e8400-e29b-41d4-a716-446655440001"
+    location_id: "550e8400-e29b-41d4-a716-446655440101"
+    name: "Camera 01 - Warehouse"
+    source_type: "RTSP"
+    source_url: "rtsp://mediamtx:8554/camera1"
+    enabled: true
+
+  - camera_id: "550e8400-e29b-41d4-a716-446655440002"
+    location_id: "550e8400-e29b-41d4-a716-446655440102"
+    name: "Camera 02 - Main Gate"
+    source_type: "RTSP"
+    source_url: "rtsp://mediamtx:8554/camera2"
+    enabled: true
