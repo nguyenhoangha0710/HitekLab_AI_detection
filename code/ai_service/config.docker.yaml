@@ -4,11 +4,11 @@ video_ingest:
   log_every_n_frames: 30
   defaults:
     source_type: RTSP
-    target_fps: 15
+    target_fps: 5
     frame_width: 640
     frame_height: 360
     encoding: JPEG
-    jpeg_quality: 80
+    jpeg_quality: 70
 
 cameras:
   - camera_id: "550e8400-e29b-41d4-a716-446655440001"

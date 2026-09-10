@@ -1,18 +1,6 @@
 name: hitek-ai-iot
 
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: hitek-redis
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   mediamtx:
     image: bluenviron/mediamtx:latest
     container_name: hitek-mediamtx
@@ -80,57 +68,11 @@ services:
       - rtsp://mediamtx:8554/camera2
     restart: unless-stopped
 
-  ai-api:
+  edge-gateway:
     build:
       context: ./code/ai_service
-    container_name: hitek-ai-api
+    container_name: hitek-edge-gateway
     depends_on:
-      redis:
-        condition: service_healthy
-    environment:
-      AI_QUEUE_BACKEND: redis
-      AI_REDIS_URL: redis://redis:6379/0
-      AI_REDIS_NUM_SHARDS: "1"
-      AI_REDIS_FRAME_BUFFER_SIZE: "100"
-      AI_REDIS_CLAIM_BATCH_SIZE: "1"
-      AI_PROCESSED_STREAM_BUFFER_SIZE: "300"
-    ports:
-      - "8001:8001"
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/ready', timeout=2)"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
-  ai-worker:
-    build:
-      context: ./code/ai_service
-    container_name: hitek-ai-worker-0
-    depends_on:
-      redis:
-        condition: service_healthy
-      ai-api:
-        condition: service_started
-    environment:
-      AI_QUEUE_BACKEND: redis
-      AI_REDIS_URL: redis://redis:6379/0
-      AI_REDIS_NUM_SHARDS: "1"
-      AI_REDIS_FRAME_BUFFER_SIZE: "100"
-      AI_REDIS_CLAIM_BATCH_SIZE: "1"
-      AI_PROCESSED_STREAM_BUFFER_SIZE: "300"
-      MODAL_YOLO_ENDPOINT_URL: ${MODAL_YOLO_ENDPOINT_URL:-}
-    command: ["python", "-m", "app.ai_worker_main", "--shard-id", "0", "--worker-id", "ai-worker-0", "--detector", "modal", "--yolo-classes", "person,car", "--confidence", "0.35", "--modal-timeout-seconds", "30"]
-    restart: unless-stopped
-
-  ai-video-ingest:
-    build:
-      context: ./code/ai_service
-    container_name: hitek-ai-video-ingest
-    depends_on:
-      redis:
-        condition: service_healthy
       mediamtx:
         condition: service_started
       camera1:
@@ -138,10 +80,10 @@ services:
       camera2:
         condition: service_started
     environment:
-      AI_QUEUE_BACKEND: redis
-      AI_REDIS_URL: redis://redis:6379/0
-      AI_REDIS_NUM_SHARDS: "1"
-      AI_REDIS_FRAME_BUFFER_SIZE: "100"
-      AI_REDIS_CLAIM_BATCH_SIZE: "1"
-    command: ["python", "-m", "app.video_ingest_main", "--config", "config.docker.yaml"]
+      MODAL_INGEST_URL: ${MODAL_INGEST_URL:-}
+      MODAL_INGEST_TIMEOUT_SECONDS: "10"
+      YOLO_CLASSES: "person,car"
+      YOLO_CONFIDENCE: "0.35"
+      TENANT_ID: ${TENANT_ID:-demo-tenant}
+    command: ["python", "-m", "app.edge_gateway_main", "--config", "config.docker.yaml"]
     restart: unless-stopped

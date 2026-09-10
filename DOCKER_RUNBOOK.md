@@ -1,52 +1,65 @@
-# Docker Runbook
+# Docker Runbook: Edge Gateway To Modal AI Server
 
-File `docker-compose.yml` o root gom toan bo pipeline demo vao mot project Docker:
+Flow hien tai:
 
 ```text
 Camera video files
   -> FFmpeg camera simulators
   -> MediaMTX RTSP server
-  -> AI Video Ingest
-  -> Redis Frame Broker
-  -> AI Worker
-  -> AI API + WebSocket Viewer
+  -> Edge Gateway / Video Ingest
+  -> Modal /ingest
+  -> Modal Queue
+  -> Modal YOLOv11 GPU Worker
+  -> Modal /results va /viewer
 ```
 
-## Services
+## Local Docker Services
 
 | Service | Vai tro |
 | --- | --- |
-| `redis` | Luu frame buffer, pending camera queue, result store va pub/sub. |
 | `mediamtx` | RTSP server noi bo, expose port `8554`. |
 | `camera1` | FFmpeg loop `dummy_video_1.mp4` va publish len `rtsp://mediamtx:8554/camera1`. |
 | `camera2` | FFmpeg loop `dummy_video_2.mp4` va publish len `rtsp://mediamtx:8554/camera2`. |
-| `ai-video-ingest` | Doc RTSP tu MediaMTX, tao `FrameJob`, enqueue vao Redis. |
-| `ai-worker` | Claim frame tu Redis, chay detector/debug overlay, ghi result va publish. |
-| `ai-api` | FastAPI server, debug API, `/ready`, `/viewer`, WebSocket result stream. |
+| `edge-gateway` | Doc RTSP, tao `FrameJob`, gui frame len Modal `/ingest`. |
 
 ## Run
 
-Chay toan bo he thong tu root project:
+Terminal 1: chay Modal AI Server async.
 
 ```powershell
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab
+.\.venv12\Scripts\Activate.ps1
+modal serve code\ai_service\modal_yolo11_service.py
+```
+
+Copy URL base cua Modal, vi du:
+
+```text
+https://xxx--api-dev.modal.run
+```
+
+Terminal 2: chay Edge Gateway local.
+
+```powershell
+cd D:\NguyenHoangHa_nam4\Internship\HitekLab
+$env:MODAL_INGEST_URL="https://xxx--api-dev.modal.run/ingest"
 docker compose up --build
 ```
 
-Mo viewer:
+Mo viewer tren Modal:
 
 ```text
-http://localhost:8001/viewer
+https://xxx--api-dev.modal.run/viewer
 ```
 
 Kiem tra API:
 
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:8001/ready" | ConvertTo-Json -Depth 5
-Invoke-RestMethod -Uri "http://localhost:8001/api/v1/ai/debug/flow" | ConvertTo-Json -Depth 8
+Invoke-RestMethod -Uri "https://xxx--api-dev.modal.run/health" | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Uri "https://xxx--api-dev.modal.run/results" | ConvertTo-Json -Depth 8
 ```
 
-Dung he thong:
+Dung Edge local:
 
 ```powershell
 docker compose down
@@ -57,9 +70,9 @@ docker compose down
 Docker network khong dung `localhost` de cac container goi nhau. Vi vay:
 
 ```text
-AI_REDIS_URL=redis://redis:6379/0
 RTSP camera1=rtsp://mediamtx:8554/camera1
 RTSP camera2=rtsp://mediamtx:8554/camera2
+MODAL_INGEST_URL=https://xxx--api-dev.modal.run/ingest
 ```
 
 Config RTSP cho container nam o:
@@ -74,49 +87,42 @@ Config local van giu o:
 code/ai_service/config.yaml
 ```
 
+## Modal Queue Flow
+
+Modal AI Server trong `code/ai_service/modal_yolo11_service.py` co:
+
+```text
+POST /ingest
+  -> validate FramePacket
+  -> put payload vao Modal Queue
+  -> spawn ModalYoloQueueWorker.process_next()
+  -> tra 202 accepted cho Edge
+
+ModalYoloQueueWorker
+  -> load YOLOv11 mot lan bang @modal.enter
+  -> pop frame tu Modal Queue
+  -> detect person/car tren GPU T4
+  -> ve bbox len frame
+  -> luu latest result vao Modal Dict
+
+GET /results
+  -> tra latest result cua cac camera
+
+GET /viewer
+  -> polling /results de hien thi frame da xu ly
+```
+
 ## Realtime Defaults
 
-Trong `docker-compose.yml` hien tai:
-
-```text
-AI_REDIS_NUM_SHARDS=1
-AI_REDIS_FRAME_BUFFER_SIZE=100
-AI_REDIS_CLAIM_BATCH_SIZE=1
-AI_PROCESSED_STREAM_BUFFER_SIZE=300
-```
-
-Nghia la:
-
-```text
-1 shard
-1 worker
-Moi camera giu toi da 100 frame trong Redis buffer
-Worker lay 1 frame moi luot de giu cong bang giua camera
-Viewer nhan frame da xu ly bang WebSocket
-```
-
-## YOLOv11 On Modal
-
-Mac dinh project Docker hien tai de `ai-worker` goi YOLOv11 endpoint tren Modal.
-Worker local van claim frame tu Redis, sau do gui JPEG len Modal de detect `person`
-+ `car`, nhan bbox ve, ve overlay va publish len viewer.
+Vi Edge gui frame qua internet len Modal, khong nen day FPS cao nhu local GPU.
+Nen bat dau voi:
 
 ```yaml
-command: ["python", "-m", "app.ai_worker_main", "--shard-id", "0", "--worker-id", "ai-worker-0", "--detector", "modal", "--yolo-classes", "person,car", "--confidence", "0.35", "--modal-timeout-seconds", "30"]
+target_fps: 2-5
+frame_width: 640
+frame_height: 360
+jpeg_quality: 70-80
+confidence: 0.25-0.35
 ```
 
-Chay Modal endpoint truoc:
-
-```powershell
-modal serve code\ai_service\modal_yolo11_service.py
-```
-
-Copy URL endpoint `detect`, roi set bien moi truong truoc khi chay Docker:
-
-```powershell
-$env:MODAL_YOLO_ENDPOINT_URL="https://...modal.run"
-docker compose up --build
-```
-
-Neu muon chay YOLO local trong worker container, doi `--detector modal` thanh
-`--detector yolo` va build worker voi `INSTALL_YOLO=true`.
+Neu `target_fps` cao hon toc do Modal worker xu ly, queue se backlog va viewer se lag.
