@@ -53,7 +53,7 @@ services:
       - -stream_loop
       - "-1"
       - -i
-      - /videos/dummy_video_2.mp4
+      - /videos/video_4_police.mp4
       - -an
       - -c:v
       - libx264

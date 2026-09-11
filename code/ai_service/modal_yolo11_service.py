@@ -8,9 +8,9 @@ import modal
 
 
 APP_NAME = "hitek-yolo11-async-ai-server"
-FRAME_QUEUE_NAME = "hitek-yolo11-ws-frame-queue-v2"
-RESULT_QUEUE_NAME = "hitek-yolo11-ws-result-queue-v2"
-STATE_DICT_NAME = "hitek-yolo11-ws-state-v2"
+FRAME_QUEUE_NAME = "hitek-yolo11-ws-frame-queue-v3"
+RESULT_QUEUE_NAME = "hitek-yolo11-ws-result-queue-v3"
+STATE_DICT_NAME = "hitek-yolo11-ws-state-v3"
 DEFAULT_MODEL = "yolo11n.pt"
 DEFAULT_CONFIDENCE = 0.35
 DEFAULT_IMAGE_SIZE = 640
