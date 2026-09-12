@@ -4,25 +4,27 @@ import queue
 import modal
 
 from modal_ai.results import latest_results_snapshot, publish_result
-from modal_ai.runtime import app, frame_queue, image, result_queue, state_store
+from modal_ai.runtime import app, frame_queues, image, result_queue, state_store
 from modal_ai.settings import (
     API_WEBSOCKET_TIMEOUT_SECONDS,
     APP_NAME,
     DEFAULT_CONFIDENCE,
     DEFAULT_IMAGE_SIZE,
     DEFAULT_MODEL,
-    FRAME_QUEUE_NAME,
+    FRAME_QUEUE_PREFIX,
     MAX_WORKER_DRAIN,
+    NUM_SHARDS,
     RESULT_QUEUE_NAME,
     STATE_DICT_NAME,
     WORKER_SPAWN_EVERY_N_FRAMES,
 )
+from modal_ai.sharding import frame_queue_name, shard_id_for_camera
 from modal_ai.time_utils import utc_iso
 from modal_ai.viewer import VIEWER_HTML
 from modal_ai.yolo import draw_and_detect
 
 
-@app.cls(image=image, gpu="T4", timeout=300, scaledown_window=300, max_containers=2)
+@app.cls(image=image, gpu="T4", timeout=300, scaledown_window=300, max_containers=NUM_SHARDS)
 class ModalYoloQueueWorker:
     model_name: str = modal.parameter(default=DEFAULT_MODEL)
 
@@ -32,37 +34,52 @@ class ModalYoloQueueWorker:
 
         self.model = YOLO(self.model_name)
 
-    def _process_payload_internal(self, payload: dict) -> dict:
+    def _process_payload_internal(self, payload: dict, shard_id: int) -> dict:
         result = draw_and_detect(self.model, payload)
+        result["shard_id"] = shard_id
+        result["worker_id"] = "ai-worker-{}".format(shard_id)
         publish_result(result)
+        print(
+            "Modal worker processed camera={} shard={} seq={} published=True".format(
+                result.get("camera_id"),
+                shard_id,
+                result.get("sequence_number"),
+            )
+        )
         return result
 
     @modal.method()
     def process_payload(self, payload: dict) -> dict:
-        return self._process_payload_internal(payload)
+        shard_id = int(payload.get("shard_id", shard_id_for_camera(str(payload.get("camera_id", "")), NUM_SHARDS)))
+        return self._process_payload_internal(payload, shard_id)
 
     @modal.method()
-    def process_next(self, max_items: int = MAX_WORKER_DRAIN) -> dict:
+    def process_next(self, shard_id: int = 0, max_items: int = MAX_WORKER_DRAIN) -> dict:
         processed = 0
         skipped = 0
         last_result = None
-        while processed < max(1, max_items):
-            try:
-                payload = frame_queue.get(block=False)
-            except queue.Empty:
-                break
+        active_key = "worker_active:{}".format(shard_id)
+        try:
+            while processed < max(1, max_items):
+                try:
+                    payload = frame_queues[shard_id].get(block=False)
+                except queue.Empty:
+                    break
 
-            if payload is None:
-                break
-            if not isinstance(payload, dict):
-                skipped += 1
-                continue
+                if payload is None:
+                    break
+                if not isinstance(payload, dict):
+                    skipped += 1
+                    continue
 
-            last_result = self._process_payload_internal(payload)
-            processed += 1
+                last_result = self._process_payload_internal(payload, shard_id)
+                processed += 1
+        finally:
+            state_store[active_key] = False
 
         return {
             "status": "processed" if processed else "empty",
+            "shard_id": shard_id,
             "processed": processed,
             "skipped": skipped,
             "last_result": last_result,
@@ -92,32 +109,53 @@ def api():
         payload.setdefault("imgsz", DEFAULT_IMAGE_SIZE)
         payload.setdefault("model", DEFAULT_MODEL)
         payload["sequence_number"] = int(payload["sequence_number"])
+        payload["shard_id"] = shard_id_for_camera(str(payload["camera_id"]), NUM_SHARDS)
         return payload
 
-    async def spawn_worker_async() -> None:
+    def worker_active_key(shard_id: int) -> str:
+        return "worker_active:{}".format(shard_id)
+
+    async def spawn_worker_async(shard_id: int) -> bool:
+        active_key = worker_active_key(shard_id)
+        if await state_store.get.aio(active_key):
+            return False
+        await state_store.put.aio(active_key, True)
         try:
-            await ModalYoloQueueWorker(model_name=DEFAULT_MODEL).process_next.spawn.aio(MAX_WORKER_DRAIN)
+            await ModalYoloQueueWorker(model_name=DEFAULT_MODEL).process_next.spawn.aio(shard_id, MAX_WORKER_DRAIN)
+            return True
         except Exception:
             # Worker spawn loi khong duoc lam dut WebSocket ingest. Frame van da
-            # nam trong Modal Queue, frame sau se tiep tuc kich hoat worker.
-            pass
+            # nam trong shard queue, frame sau se tiep tuc kich hoat worker.
+            await state_store.put.aio(active_key, False)
+            return False
 
     async def enqueue_payload_async(payload: dict) -> bool:
-        await frame_queue.put.aio(payload, block=False)
+        shard_id = int(payload["shard_id"])
+        await frame_queues[shard_id].put.aio(payload, block=False)
         sequence_number = int(payload["sequence_number"])
         worker_spawned = sequence_number <= 1 or sequence_number % WORKER_SPAWN_EVERY_N_FRAMES == 0
         if worker_spawned:
             # Khong await spawn trong receive loop, neu khong TCP/WebSocket bi
             # backpressure va Edge Gateway se gui frame cham hon target_fps.
-            asyncio.create_task(spawn_worker_async())
+            asyncio.create_task(spawn_worker_async(shard_id))
         return worker_spawned
 
     def enqueue_payload(payload: dict) -> bool:
-        frame_queue.put(payload, block=False)
+        shard_id = int(payload["shard_id"])
+        frame_queues[shard_id].put(payload, block=False)
         sequence_number = int(payload["sequence_number"])
         worker_spawned = sequence_number <= 1 or sequence_number % WORKER_SPAWN_EVERY_N_FRAMES == 0
         if worker_spawned:
-            ModalYoloQueueWorker(model_name=DEFAULT_MODEL).process_next.spawn(MAX_WORKER_DRAIN)
+            active_key = worker_active_key(shard_id)
+            if not state_store.get(active_key):
+                state_store[active_key] = True
+                try:
+                    ModalYoloQueueWorker(model_name=DEFAULT_MODEL).process_next.spawn(shard_id, MAX_WORKER_DRAIN)
+                except Exception:
+                    state_store[active_key] = False
+                    raise
+            else:
+                worker_spawned = False
         return worker_spawned
 
     @web.get("/health")
@@ -125,8 +163,9 @@ def api():
         return {
             "status": "ok",
             "service": APP_NAME,
-            "queue_backend": "modal_queue",
-            "frame_queue": FRAME_QUEUE_NAME,
+            "queue_backend": "modal_queue_shards",
+            "num_shards": NUM_SHARDS,
+            "frame_queues": [frame_queue_name(FRAME_QUEUE_PREFIX, shard_id) for shard_id in range(NUM_SHARDS)],
             "result_queue": RESULT_QUEUE_NAME,
             "state": STATE_DICT_NAME,
             "timestamp": utc_iso(),
@@ -135,8 +174,13 @@ def api():
     @web.get("/queues")
     def queues():
         return {
-            "backend": "modal_queue",
-            "message": "Modal Queue does not expose per-camera queue statistics.",
+            "backend": "modal_queue_shards",
+            "num_shards": NUM_SHARDS,
+            "frame_queues": [frame_queue_name(FRAME_QUEUE_PREFIX, shard_id) for shard_id in range(NUM_SHARDS)],
+            "active_workers": {
+                str(shard_id): bool(state_store.get(worker_active_key(shard_id))) for shard_id in range(NUM_SHARDS)
+            },
+            "message": "Modal Queue does not expose exact queue length statistics.",
             "timestamp": utc_iso(),
         }
 
@@ -155,6 +199,7 @@ def api():
             "camera_id": payload["camera_id"],
             "frame_id": payload["frame_id"],
             "sequence_number": payload["sequence_number"],
+            "shard_id": payload["shard_id"],
             "worker_spawned": worker_spawned,
             "modal_received_at": payload["modal_received_at"],
         }
@@ -183,6 +228,7 @@ def api():
                             "camera_id": payload["camera_id"],
                             "frame_id": payload["frame_id"],
                             "sequence_number": payload["sequence_number"],
+                            "shard_id": payload["shard_id"],
                             "worker_spawned": worker_spawned,
                             "accepted": accepted,
                             "timestamp": utc_iso(),

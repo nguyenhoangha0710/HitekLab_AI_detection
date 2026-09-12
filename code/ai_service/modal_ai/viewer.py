@@ -36,7 +36,9 @@ VIEWER_HTML = """
       function render(frame) {
         const s = ensure(frame);
         s.title.textContent = frame.camera_id;
-        s.meta.textContent = `seq ${frame.sequence_number} | detections ${frame.detection_count} | inference ${frame.inference_ms}ms | ${frame.modal_processed_at}`;
+        const shard = frame.shard_id ?? "n/a";
+        const worker = frame.worker_id ?? "n/a";
+        s.meta.textContent = `seq ${frame.sequence_number} | shard ${shard} | ${worker} | detections ${frame.detection_count} | inference ${frame.inference_ms}ms | ${frame.modal_processed_at}`;
         if (frame.image_b64) s.img.src = "data:image/jpeg;base64," + frame.image_b64;
       }
       function connectResults() {

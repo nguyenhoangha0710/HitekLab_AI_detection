@@ -1,6 +1,7 @@
 import modal
 
-from .settings import APP_NAME, FRAME_QUEUE_NAME, RESULT_QUEUE_NAME, STATE_DICT_NAME
+from .settings import APP_NAME, FRAME_QUEUE_PREFIX, NUM_SHARDS, RESULT_QUEUE_NAME, STATE_DICT_NAME
+from .sharding import frame_queue_name
 
 
 image = (
@@ -12,6 +13,9 @@ image = (
 )
 
 app = modal.App(APP_NAME)
-frame_queue = modal.Queue.from_name(FRAME_QUEUE_NAME, create_if_missing=True)
+frame_queues = [
+    modal.Queue.from_name(frame_queue_name(FRAME_QUEUE_PREFIX, shard_id), create_if_missing=True)
+    for shard_id in range(NUM_SHARDS)
+]
 result_queue = modal.Queue.from_name(RESULT_QUEUE_NAME, create_if_missing=True)
 state_store = modal.Dict.from_name(STATE_DICT_NAME, create_if_missing=True)

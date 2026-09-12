@@ -16,15 +16,18 @@ class ModalYolo11WebSocketRouteTests(unittest.TestCase):
         self.assertIn('@web.websocket("/ingest")', entrypoint)
         self.assertIn('@web.websocket("/ws/results")', entrypoint)
         self.assertIn('@web.post("/ingest"', entrypoint)
-        self.assertIn("from modal_ai.runtime import app, frame_queue, image, result_queue, state_store", entrypoint)
+        self.assertIn("from modal_ai.runtime import app, frame_queues, image, result_queue, state_store", entrypoint)
         self.assertIn("from modal_ai.yolo import draw_and_detect", entrypoint)
-        self.assertIn("frame_queue.put", entrypoint)
-        self.assertIn("frame_queue.get", entrypoint)
+        self.assertIn("shard_id_for_camera", entrypoint)
+        self.assertIn("frame_queues[shard_id].put", entrypoint)
+        self.assertIn("frame_queues[shard_id].get", entrypoint)
+        self.assertIn("worker_active_key", entrypoint)
         self.assertIn("VIEWER_HTML", entrypoint)
 
         self.assertIn("modal.Image.debian_slim", runtime)
         self.assertIn('add_local_python_source("modal_ai")', runtime)
-        self.assertIn("modal.Queue.from_name(FRAME_QUEUE_NAME", runtime)
+        self.assertIn("frame_queues = [", runtime)
+        self.assertIn("modal.Queue.from_name(frame_queue_name(FRAME_QUEUE_PREFIX", runtime)
         self.assertIn("modal.Queue.from_name(RESULT_QUEUE_NAME", runtime)
         self.assertIn("modal.Dict.from_name(STATE_DICT_NAME", runtime)
 
@@ -34,9 +37,12 @@ class ModalYolo11WebSocketRouteTests(unittest.TestCase):
 
         self.assertIn("def draw_and_detect", yolo)
         self.assertIn("model.predict", yolo)
+        self.assertIn("NUM_SHARDS = 2", settings)
+        self.assertIn("FRAME_QUEUE_PREFIX", settings)
         self.assertIn("person", settings)
         self.assertIn("car", settings)
         self.assertIn("Modal YOLOv11 Live Result Viewer", viewer)
+        self.assertIn("shard", viewer)
 
 
 if __name__ == "__main__":
