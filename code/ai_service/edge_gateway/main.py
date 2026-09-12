@@ -6,8 +6,8 @@ import threading
 from typing import List
 
 from .config import load_video_ingest_config
-from .modal_frame_sender import ModalFrameSender
-from .modal_websocket_frame_sender import ModalWebSocketFrameSender
+from .transport.modal_http_sender import ModalFrameSender
+from .transport.modal_websocket_sender import ModalWebSocketFrameSender
 from .video_ingest import VideoIngestWorker
 
 

@@ -1,148 +1,25 @@
 import base64
 import queue
-import time
-from datetime import datetime, timezone
-from typing import Dict, List
 
 import modal
 
-
-APP_NAME = "hitek-yolo11-async-ai-server"
-FRAME_QUEUE_NAME = "hitek-yolo11-ws-frame-queue-v3"
-RESULT_QUEUE_NAME = "hitek-yolo11-ws-result-queue-v3"
-STATE_DICT_NAME = "hitek-yolo11-ws-state-v3"
-DEFAULT_MODEL = "yolo11n.pt"
-DEFAULT_CONFIDENCE = 0.35
-DEFAULT_IMAGE_SIZE = 640
-MAX_WORKER_DRAIN = 32
-WORKER_SPAWN_EVERY_N_FRAMES = 4
-API_WEBSOCKET_TIMEOUT_SECONDS = 3600
-COCO_CLASS_IDS: Dict[str, int] = {
-    "person": 0,
-    "car": 2,
-}
-
-
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("libgl1", "libglib2.0-0")
-    .pip_install("fastapi[standard]", "opencv-python-headless", "numpy", "ultralytics")
-    .env({"YOLO_CONFIG_DIR": "/tmp/Ultralytics"})
+from modal_ai.results import latest_results_snapshot, publish_result
+from modal_ai.runtime import app, frame_queue, image, result_queue, state_store
+from modal_ai.settings import (
+    API_WEBSOCKET_TIMEOUT_SECONDS,
+    APP_NAME,
+    DEFAULT_CONFIDENCE,
+    DEFAULT_IMAGE_SIZE,
+    DEFAULT_MODEL,
+    FRAME_QUEUE_NAME,
+    MAX_WORKER_DRAIN,
+    RESULT_QUEUE_NAME,
+    STATE_DICT_NAME,
+    WORKER_SPAWN_EVERY_N_FRAMES,
 )
-
-app = modal.App(APP_NAME)
-frame_queue = modal.Queue.from_name(FRAME_QUEUE_NAME, create_if_missing=True)
-result_queue = modal.Queue.from_name(RESULT_QUEUE_NAME, create_if_missing=True)
-state_store = modal.Dict.from_name(STATE_DICT_NAME, create_if_missing=True)
-
-
-def utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def latest_results_snapshot() -> List[dict]:
-    values = []
-    for key, value in state_store.items():
-        if str(key).startswith("latest:"):
-            values.append(value)
-    values.sort(key=lambda item: str(item.get("camera_id", "")))
-    return values
-
-
-def parse_class_ids(value) -> List[int]:
-    if value is None:
-        return [COCO_CLASS_IDS["person"], COCO_CLASS_IDS["car"]]
-
-    raw_items = value
-    if isinstance(value, str):
-        raw_items = value.split(",")
-
-    class_ids: List[int] = []
-    for raw_item in raw_items:
-        item = str(raw_item).strip().lower()
-        if not item:
-            continue
-        if item.isdigit():
-            class_id = int(item)
-        elif item in COCO_CLASS_IDS:
-            class_id = COCO_CLASS_IDS[item]
-        else:
-            raise ValueError("Unsupported class '{}'. Use person, car, 0, or 2.".format(item))
-        if class_id not in class_ids:
-            class_ids.append(class_id)
-    return class_ids or [COCO_CLASS_IDS["person"], COCO_CLASS_IDS["car"]]
-
-
-def draw_and_detect(model, payload: dict) -> dict:
-    import cv2
-    import numpy as np
-
-    modal_received_at = payload.get("modal_received_at") or utc_iso()
-    started_at = time.monotonic()
-    image_bytes = base64.b64decode(payload["image_b64"])
-    np_buffer = np.frombuffer(image_bytes, dtype=np.uint8)
-    frame = cv2.imdecode(np_buffer, cv2.IMREAD_COLOR)
-    if frame is None:
-        raise ValueError("Cannot decode image_b64 as an image.")
-
-    confidence = float(payload.get("confidence", DEFAULT_CONFIDENCE))
-    image_size = int(payload.get("imgsz", DEFAULT_IMAGE_SIZE))
-    class_ids = parse_class_ids(payload.get("classes", ["person", "car"]))
-
-    results = model.predict(
-        frame,
-        conf=confidence,
-        classes=class_ids,
-        imgsz=image_size,
-        verbose=False,
-    )
-
-    detections = []
-    result = results[0] if results else None
-    names = result.names if result is not None else {}
-    boxes = result.boxes if result is not None else None
-
-    if boxes is not None:
-        for box in boxes:
-            class_id = int(box.cls[0].item())
-            score = float(box.conf[0].item())
-            x1, y1, x2, y2 = [int(value) for value in box.xyxy[0].tolist()]
-            detections.append(
-                {
-                    "class_id": class_id,
-                    "class_name": str(names.get(class_id, class_id)),
-                    "confidence": score,
-                    "bbox_xyxy": [x1, y1, x2, y2],
-                }
-            )
-
-            color = (32, 220, 80) if class_id == COCO_CLASS_IDS["person"] else (40, 170, 255)
-            label = "{} {:.2f}".format(names.get(class_id, class_id), score)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, label, (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-    processed_at = utc_iso()
-    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-    annotated_b64 = base64.b64encode(encoded.tobytes()).decode("ascii") if ok else None
-
-    inference_ms = round((time.monotonic() - started_at) * 1000.0, 2)
-    return {
-        "tenant_id": payload.get("tenant_id"),
-        "camera_id": payload.get("camera_id"),
-        "location_id": payload.get("location_id"),
-        "frame_id": payload.get("frame_id"),
-        "sequence_number": payload.get("sequence_number"),
-        "captured_at": payload.get("captured_at"),
-        "edge_sent_at": payload.get("edge_sent_at"),
-        "modal_received_at": modal_received_at,
-        "modal_processed_at": processed_at,
-        "model": payload.get("model", DEFAULT_MODEL),
-        "classes": class_ids,
-        "detections": detections,
-        "detection_count": len(detections),
-        "inference_ms": inference_ms,
-        "image_b64": annotated_b64,
-    }
+from modal_ai.time_utils import utc_iso
+from modal_ai.viewer import VIEWER_HTML
+from modal_ai.yolo import draw_and_detect
 
 
 @app.cls(image=image, gpu="T4", timeout=300, scaledown_window=300, max_containers=2)
@@ -157,20 +34,7 @@ class ModalYoloQueueWorker:
 
     def _process_payload_internal(self, payload: dict) -> dict:
         result = draw_and_detect(self.model, payload)
-        camera_id = result["camera_id"]
-        if camera_id:
-            state_store["latest:{}".format(camera_id)] = result
-            state_store["stats:{}".format(camera_id)] = {
-                "camera_id": camera_id,
-                "last_frame_id": result.get("frame_id"),
-                "last_sequence_number": result.get("sequence_number"),
-                "last_processed_at": result.get("modal_processed_at"),
-                "last_detection_count": result.get("detection_count"),
-            }
-        try:
-            result_queue.put(result, block=False)
-        except queue.Full:
-            pass
+        publish_result(result)
         return result
 
     @modal.method()
@@ -364,76 +228,7 @@ def api():
 
     @web.get("/viewer")
     def viewer():
-        return HTMLResponse(
-            """
-            <!doctype html>
-            <html>
-              <head>
-                <title>Modal YOLOv11 Result Viewer</title>
-                <style>
-                  body { margin: 0; font-family: Arial, sans-serif; background: #111; color: #eee; }
-                  h1 { margin: 16px; font-size: 20px; }
-                  main { padding: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; }
-                  h2 { margin: 0 0 6px; font-size: 14px; }
-                  p { margin: 0 0 8px; color: #bbb; font-size: 12px; }
-                  img { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; border: 1px solid #333; }
-                </style>
-              </head>
-              <body>
-                <h1>Modal YOLOv11 Live Result Viewer</h1>
-                <p id="status" style="margin: -8px 16px 0; color: #7dd3fc; font-size: 13px;">Connecting result WebSocket...</p>
-                <main id="grid"></main>
-                <script>
-                  const grid = document.getElementById("grid");
-                  const status = document.getElementById("status");
-                  const sections = new Map();
-                  function ensure(frame) {
-                    let state = sections.get(frame.camera_id);
-                    if (state) return state;
-                    const section = document.createElement("section");
-                    const title = document.createElement("h2");
-                    const meta = document.createElement("p");
-                    const img = document.createElement("img");
-                    section.append(title, meta, img);
-                    grid.append(section);
-                    state = { title, meta, img };
-                    sections.set(frame.camera_id, state);
-                    return state;
-                  }
-                  function render(frame) {
-                    const s = ensure(frame);
-                    s.title.textContent = frame.camera_id;
-                    s.meta.textContent = `seq ${frame.sequence_number} | detections ${frame.detection_count} | inference ${frame.inference_ms}ms | ${frame.modal_processed_at}`;
-                    if (frame.image_b64) s.img.src = "data:image/jpeg;base64," + frame.image_b64;
-                  }
-                  function connectResults() {
-                    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-                    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/results`);
-                    socket.onopen = () => {
-                      status.textContent = "Result WebSocket connected. Waiting for processed frames...";
-                    };
-                    socket.onmessage = (event) => {
-                      const message = JSON.parse(event.data);
-                      if (message.type === "frame") {
-                        status.textContent = `Receiving live processed frames - ${message.timestamp}`;
-                        render(message.frame);
-                      }
-                    };
-                    socket.onclose = () => {
-                      status.textContent = "Result WebSocket disconnected. Reconnecting...";
-                      setTimeout(connectResults, 1000);
-                    };
-                    socket.onerror = () => {
-                      status.textContent = "Result WebSocket error.";
-                      socket.close();
-                    };
-                  }
-                  connectResults();
-                </script>
-              </body>
-            </html>
-            """
-        )
+        return HTMLResponse(VIEWER_HTML)
 
     return web
 

@@ -3,8 +3,8 @@ import unittest
 
 import numpy as np
 
-from app.config import CameraIngestConfig, VideoIngestConfig, load_video_ingest_config
-from app.video_ingest import VideoIngestWorker
+from edge_gateway.config import CameraIngestConfig, VideoIngestConfig, load_video_ingest_config
+from edge_gateway.video_ingest import VideoIngestWorker
 
 
 class FakeSource:

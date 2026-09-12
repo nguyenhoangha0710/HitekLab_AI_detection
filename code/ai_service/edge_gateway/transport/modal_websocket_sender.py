@@ -1,15 +1,17 @@
 import base64
+import json
 import logging
 import threading
 from dataclasses import dataclass
 from typing import Dict, Optional
+from urllib.parse import urlparse, urlunparse
 
-import httpx
+from websockets.sync.client import connect
 
-from .frame_queue import FrameJob
-from .image_codec import frame_size
-from .models import CameraQueueSummary
-from .time_utils import to_iso_utc, utc_now
+from common.frame_job import FrameJob
+from common.image_codec import frame_size
+from common.models import CameraQueueSummary
+from common.time_utils import to_iso_utc, utc_now
 
 
 LOGGER = logging.getLogger(__name__)
@@ -29,34 +31,49 @@ class _SenderStats:
     image_height: Optional[int] = None
 
 
-class ModalFrameSender:
-    """Edge-side sender: nhan FrameJob tu Video Ingest va day len Modal /ingest.
+def to_websocket_ingest_url(url: str) -> str:
+    """Chuyen Modal base/http ingest URL thanh WebSocket ingest URL."""
+    if not url:
+        raise ValueError("Modal WebSocket URL is required.")
 
-    Lop nay co cung interface enqueue(job) voi sender WebSocket de
-    VideoIngestWorker co the tai su dung ma khong can biet dich den la HTTP hay WebSocket.
-    """
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme == "https":
+        scheme = "wss"
+    elif scheme == "http":
+        scheme = "ws"
+    elif scheme not in ("ws", "wss"):
+        raise ValueError("Unsupported Modal URL scheme: {}".format(parsed.scheme))
+
+    path = parsed.path.rstrip("/")
+    if path.endswith("/ingest"):
+        return urlunparse((scheme, parsed.netloc, path, "", "", ""))
+    if path.endswith("/ws"):
+        path = path[: -len("/ws")]
+    path = "{}/ws/ingest".format(path or "")
+
+    return urlunparse((scheme, parsed.netloc, path, "", "", ""))
+
+
+class ModalWebSocketFrameSender:
+    """Edge-side sender gui frame len Modal qua mot WebSocket connection dai han."""
 
     def __init__(
         self,
-        ingest_url: str,
+        websocket_url: str,
         timeout_seconds: float = 10.0,
         confidence_threshold: float = 0.35,
         yolo_classes: str = "person,car",
         tenant_id: Optional[str] = None,
-        http_client=None,
+        connector=connect,
     ) -> None:
-        if not ingest_url:
-            raise ValueError("Modal ingest URL is required.")
-        self.ingest_url = ingest_url
+        self.websocket_url = to_websocket_ingest_url(websocket_url)
         self.timeout_seconds = timeout_seconds
         self.confidence_threshold = confidence_threshold
         self.yolo_classes = [item.strip() for item in yolo_classes.split(",") if item.strip()]
         self.tenant_id = tenant_id
-        self._owns_client = http_client is None
-        self._client = http_client or httpx.Client(
-            timeout=httpx.Timeout(timeout_seconds),
-            limits=httpx.Limits(max_keepalive_connections=20, max_connections=20),
-        )
+        self._connector = connector
+        self._connection = None
         self._lock = threading.Lock()
         self._stats: Dict[str, _SenderStats] = {}
 
@@ -64,6 +81,7 @@ class ModalFrameSender:
         metadata = job.metadata
         width, height = frame_size(job.frame)
         payload = self._build_payload(job)
+        message = json.dumps(payload, separators=(",", ":"))
 
         with self._lock:
             stats = self._stats.setdefault(
@@ -76,34 +94,57 @@ class ModalFrameSender:
             stats.image_width = width
             stats.image_height = height
 
-        try:
-            # Dung persistent HTTP client de tai su dung TCP/TLS connection.
-            # Neu moi frame tao mot client/request rieng, latency internet len Modal se rat cao.
-            response = self._client.post(self.ingest_url, json=payload)
-            response.raise_for_status()
-            accepted = True
-        except Exception as exc:
-            accepted = False
-            LOGGER.warning(
-                "EDGE_MODAL_SEND_FAILED camera=%s frame=%s seq=%s error=%s",
-                metadata.camera_id,
-                metadata.frame_id,
-                metadata.sequence_number,
-                exc,
-            )
-
-        with self._lock:
-            stats = self._stats[metadata.camera_id]
+            accepted = self._send_with_reconnect(message, metadata.camera_id, metadata.frame_id, metadata.sequence_number)
             stats.last_sent_at = to_iso_utc(utc_now())
             if accepted:
                 stats.accepted_frames += 1
+                if stats.accepted_frames % 30 == 0:
+                    LOGGER.info(
+                        "EDGE_MODAL_WS_SENT camera=%s seq=%s accepted_frames=%s url=%s",
+                        metadata.camera_id,
+                        metadata.sequence_number,
+                        stats.accepted_frames,
+                        self.websocket_url,
+                    )
             else:
                 stats.failed_frames += 1
             return self._summary(stats)
 
     def close(self) -> None:
-        if self._owns_client:
-            self._client.close()
+        with self._lock:
+            if self._connection is not None:
+                try:
+                    self._connection.close()
+                finally:
+                    self._connection = None
+
+    def _connect(self):
+        if self._connection is None:
+            LOGGER.info("Connecting Modal WebSocket %s", self.websocket_url)
+            self._connection = self._connector(
+                self.websocket_url,
+                open_timeout=self.timeout_seconds,
+                close_timeout=self.timeout_seconds,
+                max_size=None,
+            )
+        return self._connection
+
+    def _send_with_reconnect(self, message: str, camera_id: str, frame_id: str, sequence_number: int) -> bool:
+        for attempt in range(1, 3):
+            try:
+                self._connect().send(message)
+                return True
+            except Exception as exc:
+                LOGGER.warning(
+                    "EDGE_MODAL_WS_SEND_FAILED attempt=%s camera=%s frame=%s seq=%s error=%s",
+                    attempt,
+                    camera_id,
+                    frame_id,
+                    sequence_number,
+                    exc,
+                )
+                self._connection = None
+        return False
 
     def _build_payload(self, job: FrameJob) -> dict:
         metadata = job.metadata

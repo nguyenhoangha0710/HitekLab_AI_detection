@@ -3,12 +3,13 @@ import logging
 import signal
 import threading
 
-from .ai_worker import AIWorker
-from .config import load_queue_config
+from common.config import load_queue_config
+
 from .detector import build_person_detector
 from .queue_factory import build_frame_queue
 from .result_publisher import build_result_publisher
 from .result_store_factory import build_result_store
+from .worker import AIWorker
 
 
 def parse_args() -> argparse.Namespace:

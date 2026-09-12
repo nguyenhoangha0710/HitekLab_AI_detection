@@ -4,9 +4,11 @@ import signal
 import threading
 from typing import List
 
-from .config import load_queue_config, load_video_ingest_config
+from common.config import load_queue_config
+from edge_gateway.config import load_video_ingest_config
+from edge_gateway.video_ingest import VideoIngestWorker
+
 from .queue_factory import build_frame_queue
-from .video_ingest import VideoIngestWorker
 
 
 def parse_args() -> argparse.Namespace:

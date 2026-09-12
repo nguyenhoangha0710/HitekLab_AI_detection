@@ -3,13 +3,14 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from app.ai_worker import AIWorker
-from app.detector import Detection, ModalYoloHttpDetector, parse_coco_class_filter, summarize_detections
-from app.frame_queue import FrameJob, FrameQueueManager
-from app.image_codec import encode_jpeg
-from app.models import FrameMetadata
-from app.result_store import MemoryResultStore
-from app.time_utils import utc_now
+from local_ai.worker import AIWorker
+from local_ai.detector import Detection, ModalYoloHttpDetector, parse_coco_class_filter, summarize_detections
+from common.frame_job import FrameJob
+from local_ai.frame_queue import FrameQueueManager
+from common.image_codec import encode_jpeg
+from common.models import FrameMetadata
+from local_ai.result_store import MemoryResultStore
+from common.time_utils import utc_now
 
 
 class FakePersonDetector:
@@ -99,7 +100,7 @@ class AIWorkerDetectorTests(unittest.TestCase):
             ]
         }
 
-        with patch("app.detector.httpx.post", return_value=response) as post:
+        with patch("local_ai.detector.httpx.post", return_value=response) as post:
             detections = detector.detect_job(self._job())
 
         post.assert_called_once()

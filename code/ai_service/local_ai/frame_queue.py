@@ -4,19 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Deque, Dict, List, Optional, Set
 
-import numpy as np
-
-from .image_codec import frame_size
-from .models import CameraQueueSummary, FrameMetadata
-from .time_utils import to_iso_utc, utc_now
-
-
-@dataclass(frozen=True)
-class FrameJob:
-    metadata: FrameMetadata
-    frame: np.ndarray
-    image_bytes: bytes
-    received_at: datetime
+from common.frame_job import FrameJob
+from common.image_codec import frame_size
+from common.models import CameraQueueSummary
+from common.time_utils import to_iso_utc, utc_now
 
 
 @dataclass

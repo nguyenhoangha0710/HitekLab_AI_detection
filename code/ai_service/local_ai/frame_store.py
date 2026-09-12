@@ -5,9 +5,9 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from .image_codec import encode_jpeg, frame_size
-from .models import CameraFrameSummary, FrameMetadata
-from .time_utils import to_iso_utc
+from common.image_codec import encode_jpeg, frame_size
+from common.models import CameraFrameSummary, FrameMetadata
+from common.time_utils import to_iso_utc
 
 
 @dataclass(frozen=True)

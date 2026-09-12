@@ -3,11 +3,11 @@ from unittest.mock import Mock
 
 import numpy as np
 
-from app.frame_queue import FrameJob
-from app.image_codec import encode_jpeg
-from app.modal_websocket_frame_sender import ModalWebSocketFrameSender, to_websocket_ingest_url
-from app.models import FrameMetadata
-from app.time_utils import utc_now
+from common.frame_job import FrameJob
+from common.image_codec import encode_jpeg
+from edge_gateway.transport.modal_websocket_sender import ModalWebSocketFrameSender, to_websocket_ingest_url
+from common.models import FrameMetadata
+from common.time_utils import utc_now
 
 
 class ModalWebSocketFrameSenderTests(unittest.TestCase):

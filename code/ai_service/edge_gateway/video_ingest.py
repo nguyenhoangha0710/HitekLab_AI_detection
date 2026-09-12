@@ -4,11 +4,12 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from common.frame_job import FrameJob
+from common.image_codec import encode_jpeg, frame_size, resize_frame
+from common.models import FrameMetadata
+from common.time_utils import utc_now
+
 from .config import CameraIngestConfig, VideoIngestConfig
-from .frame_queue import FrameJob
-from .image_codec import encode_jpeg, frame_size, resize_frame
-from .models import FrameMetadata
-from .time_utils import utc_now
 from .video_source import RtspVideoSource
 
 

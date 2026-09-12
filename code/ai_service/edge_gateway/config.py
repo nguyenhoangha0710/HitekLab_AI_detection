@@ -1,15 +1,8 @@
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
 import yaml
-
-
-@dataclass(frozen=True)
-class QueueBackendConfig:
-    backend: str
-    processed_stream_buffer_size: int
 
 
 @dataclass(frozen=True)
@@ -33,14 +26,6 @@ class VideoIngestConfig:
     log_every_n_frames: int
     jpeg_quality: int
     cameras: List[CameraIngestConfig]
-
-
-def load_queue_config() -> QueueBackendConfig:
-    return QueueBackendConfig(
-        backend=os.getenv("AI_QUEUE_BACKEND", "memory").strip().lower(),
-        processed_stream_buffer_size=max(1, int(os.getenv("AI_PROCESSED_STREAM_BUFFER_SIZE", "120"))),
-    )
-
 
 def load_video_ingest_config(path: str = "config.yaml") -> VideoIngestConfig:
     config_path = Path(path).resolve()

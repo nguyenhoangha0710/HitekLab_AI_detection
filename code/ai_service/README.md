@@ -22,13 +22,64 @@ dua vao Modal Queue, chay YOLOv11 GPU va push result ve viewer qua WebSocket.
 
 | File | Vai tro |
 | --- | --- |
-| `app/video_ingest.py` | Doc RTSP, sampling, resize, encode JPEG, tao `FrameJob`. |
-| `app/edge_gateway_main.py` | Entry point Edge Gateway local. |
-| `app/modal_websocket_frame_sender.py` | Gui `FrameJob` len Modal `/ws/ingest` bang WebSocket. |
-| `app/modal_frame_sender.py` | Gui `FrameJob` len Modal `/ingest` bang HTTP fallback. |
-| `modal_yolo11_service.py` | Modal AI Server: `/ws/ingest`, Modal Queue, YOLO Worker, `/ws/results`, `/viewer`. |
+| `common/` | Models, `FrameJob`, image codec va time helpers dung chung. |
+| `edge_gateway/video_ingest.py` | Doc RTSP, sampling, resize, encode JPEG, tao `FrameJob`. |
+| `edge_gateway/main.py` | Entry point Edge Gateway local. |
+| `edge_gateway/transport/modal_websocket_sender.py` | Gui `FrameJob` len Modal `/ws/ingest` bang WebSocket. |
+| `edge_gateway/transport/modal_http_sender.py` | Gui `FrameJob` len Modal `/ingest` bang HTTP fallback. |
+| `local_ai/` | Local FastAPI debug API, memory queue, worker, detector va result store. |
+| `modal_yolo11_service.py` | Entry point Modal AI Server: khai bao worker va API routes. |
+| `modal_ai/settings.py` | Hang so cau hinh cho Modal app, YOLO va queue. |
+| `modal_ai/runtime.py` | Khoi tao Modal `app`, image, queue va state store. |
+| `modal_ai/yolo.py` | Decode frame, chay YOLOv11 person/car, ve bbox va tao result payload. |
+| `modal_ai/results.py` | Luu latest result va publish frame da xu ly sang viewer. |
+| `modal_ai/viewer.py` | HTML/JavaScript viewer WebSocket. |
 | `config.yaml` | Config chay local. |
 | `config.docker.yaml` | Config chay trong Docker network. |
+
+## Module Layout
+
+```text
+code/ai_service
+  common/
+    config.py                   # local queue config
+    frame_job.py                # FrameJob shared contract
+    image_codec.py              # resize/decode/encode/draw helpers
+    models.py                   # FrameMetadata, response/summary schemas
+    time_utils.py               # UTC helpers
+  edge_gateway/
+    main.py                     # CLI local edge gateway
+    config.py                   # camera ingest YAML config
+    video_source.py             # RTSP/OpenCV source
+    video_ingest.py             # RTSP reader + sampler + FrameJob builder
+    transport/
+      modal_websocket_sender.py
+      modal_http_sender.py
+  local_ai/
+    api.py                      # local FastAPI debug API
+    worker.py                   # local AI worker
+    worker_main.py              # local worker CLI
+    detector.py                 # local/debug detector adapters
+    frame_queue.py              # local frame broker abstraction
+    result_store.py             # local result store abstraction
+  modal_ai/
+    settings.py                 # Modal constants
+    runtime.py                  # Modal app/image/Queue/Dict resources
+    yolo.py                     # Modal YOLO inference
+    results.py                  # Modal result publish/store
+    viewer.py                   # Modal browser viewer
+  modal_yolo11_service.py       # Modal entrypoint, giu lenh chay cu
+```
+
+Quy tac tach module:
+
+```text
+Edge code chi biet doc RTSP va gui FramePacket.
+Modal entrypoint chi noi route/worker voi cac module ben duoi.
+YOLO logic khong nam trong route.
+Viewer HTML khong nam lan voi inference.
+Queue/state resource nam trong runtime.py de doi backend de hon sau nay.
+```
 
 ## Chay Full Pipeline
 
@@ -74,7 +125,7 @@ Can co RTSP stream dang chay truoc, sau do:
 ```powershell
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
 $env:MODAL_INGEST_URL="https://xxx--api-dev.modal.run/ingest"
-python -m app.edge_gateway_main --config config.yaml
+python -m edge_gateway.main --config config.yaml
 ```
 
 ## Modal API

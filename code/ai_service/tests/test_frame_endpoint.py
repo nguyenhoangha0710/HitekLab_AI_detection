@@ -5,12 +5,12 @@ from uuid import uuid4
 import numpy as np
 from fastapi.testclient import TestClient
 
-from app.ai_worker import AIWorker
-from app.frame_queue import FrameJob
-from app.image_codec import encode_jpeg
-from app.main import app, frame_queue, result_store
-from app.models import FrameMetadata
-from app.time_utils import utc_now
+from local_ai.worker import AIWorker
+from common.frame_job import FrameJob
+from common.image_codec import encode_jpeg
+from local_ai.api import app, frame_queue, result_store
+from common.models import FrameMetadata
+from common.time_utils import utc_now
 
 
 class FrameEndpointTests(unittest.TestCase):

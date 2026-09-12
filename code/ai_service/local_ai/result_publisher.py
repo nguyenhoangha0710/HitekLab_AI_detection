@@ -1,8 +1,9 @@
 import base64
 import logging
 
+from common.time_utils import to_iso_utc
+
 from .result_store import ProcessedFrame
-from .time_utils import to_iso_utc
 
 
 LOGGER = logging.getLogger(__name__)

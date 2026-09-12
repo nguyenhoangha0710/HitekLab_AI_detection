@@ -18,7 +18,11 @@ RUN if [ "$INSTALL_YOLO" = "true" ]; then \
         pip install --no-cache-dir -r requirements.txt; \
     fi
 
-COPY app ./app
+COPY common ./common
+COPY edge_gateway ./edge_gateway
+COPY local_ai ./local_ai
+COPY modal_ai ./modal_ai
+COPY modal_yolo11_service.py .
 COPY config.yaml .
 COPY config.docker.yaml .
 

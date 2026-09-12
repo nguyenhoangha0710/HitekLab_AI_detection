@@ -7,14 +7,15 @@ from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSock
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
 
-from .config import load_queue_config
-from .frame_queue import FrameJob
-from .image_codec import decode_image, draw_debug_overlay, encode_jpeg, frame_size
-from .models import FrameAcceptedResponse, FrameMetadata
+from common.config import load_queue_config
+from common.frame_job import FrameJob
+from common.image_codec import decode_image, draw_debug_overlay, encode_jpeg, frame_size
+from common.models import FrameAcceptedResponse, FrameMetadata
+from common.time_utils import to_iso_utc, utc_now
+
 from .queue_factory import build_frame_queue
 from .result_publisher import processed_frame_to_message
 from .result_store_factory import build_result_store
-from .time_utils import to_iso_utc, utc_now
 
 
 app = FastAPI(title="HITEK AI Service", version="0.1.0")
@@ -410,4 +411,4 @@ def viewer():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8001, reload=True)
+    uvicorn.run("local_ai.api:app", host="0.0.0.0", port=8001, reload=True)

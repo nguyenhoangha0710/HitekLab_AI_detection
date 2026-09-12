@@ -2,9 +2,10 @@ import unittest
 
 import numpy as np
 
-from app.frame_queue import FrameJob, FrameQueueManager
-from app.models import FrameMetadata
-from app.time_utils import utc_now
+from common.frame_job import FrameJob
+from local_ai.frame_queue import FrameQueueManager
+from common.models import FrameMetadata
+from common.time_utils import utc_now
 
 
 class FrameQueueManagerTests(unittest.TestCase):

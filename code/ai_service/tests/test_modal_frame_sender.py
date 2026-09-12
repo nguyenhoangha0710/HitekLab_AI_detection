@@ -3,11 +3,11 @@ from unittest.mock import Mock
 
 import numpy as np
 
-from app.frame_queue import FrameJob
-from app.image_codec import encode_jpeg
-from app.modal_frame_sender import ModalFrameSender
-from app.models import FrameMetadata
-from app.time_utils import utc_now
+from common.frame_job import FrameJob
+from common.image_codec import encode_jpeg
+from edge_gateway.transport.modal_http_sender import ModalFrameSender
+from common.models import FrameMetadata
+from common.time_utils import utc_now
 
 
 class ModalFrameSenderTests(unittest.TestCase):

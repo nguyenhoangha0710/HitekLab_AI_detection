@@ -1,4 +1,5 @@
-from .config import QueueBackendConfig
+from common.config import QueueBackendConfig
+
 from .frame_queue import FrameQueueManager
 
 

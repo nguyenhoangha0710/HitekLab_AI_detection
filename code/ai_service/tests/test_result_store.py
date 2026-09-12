@@ -2,11 +2,11 @@ import unittest
 
 import numpy as np
 
-from app.frame_queue import FrameJob
-from app.image_codec import decode_image
-from app.models import FrameMetadata
-from app.result_store import MemoryResultStore
-from app.time_utils import utc_now
+from common.frame_job import FrameJob
+from common.image_codec import decode_image
+from common.models import FrameMetadata
+from local_ai.result_store import MemoryResultStore
+from common.time_utils import utc_now
 
 
 class ResultStoreTests(unittest.TestCase):

@@ -3,7 +3,7 @@ import unittest
 import cv2
 import numpy as np
 
-from app.image_codec import decode_image, encode_jpeg, frame_size
+from common.image_codec import decode_image, encode_jpeg, frame_size
 
 
 class ImageCodecTests(unittest.TestCase):

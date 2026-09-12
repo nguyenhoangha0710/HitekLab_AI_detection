@@ -87,5 +87,5 @@ services:
       YOLO_CLASSES: "person,car"
       YOLO_CONFIDENCE: "0.35"
       TENANT_ID: ${TENANT_ID:-demo-tenant}
-    command: ["python", "-m", "app.edge_gateway_main", "--config", "config.docker.yaml"]
+    command: ["python", "-m", "edge_gateway.main", "--config", "config.docker.yaml"]
     restart: unless-stopped

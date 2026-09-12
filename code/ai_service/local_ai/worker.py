@@ -2,9 +2,10 @@ import logging
 import threading
 from typing import Optional
 
+from common.image_codec import draw_debug_overlay
+from common.time_utils import utc_now
+
 from .detector import NoopPersonDetector, draw_detections, summarize_detections
-from .image_codec import draw_debug_overlay
-from .time_utils import utc_now
 
 
 LOGGER = logging.getLogger(__name__)

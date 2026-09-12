@@ -6,10 +6,10 @@ from typing import Deque, Dict, List, Optional
 
 import numpy as np
 
-from .frame_queue import FrameJob
-from .image_codec import encode_jpeg, frame_size
-from .models import FrameMetadata, ProcessedFrameSummary
-from .time_utils import to_iso_utc
+from common.frame_job import FrameJob
+from common.image_codec import encode_jpeg, frame_size
+from common.models import FrameMetadata, ProcessedFrameSummary
+from common.time_utils import to_iso_utc
 
 
 @dataclass(frozen=True)
