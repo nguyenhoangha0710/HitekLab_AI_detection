@@ -1,7 +1,8 @@
 import queue
 from typing import List
 
-from .runtime import result_queue, state_store
+from .runtime import result_queues, state_store
+from .settings import RESULT_QUEUE_LIMIT
 
 
 def latest_results_snapshot() -> List[dict]:
@@ -13,7 +14,7 @@ def latest_results_snapshot() -> List[dict]:
     return values
 
 
-def publish_result(result: dict) -> None:
+def publish_result(result: dict, shard_id: int) -> None:
     camera_id = result["camera_id"]
     if camera_id:
         state_store["latest:{}".format(camera_id)] = result
@@ -24,7 +25,14 @@ def publish_result(result: dict) -> None:
             "last_processed_at": result.get("modal_processed_at"),
             "last_detection_count": result.get("detection_count"),
         }
+    result_queue = result_queues[shard_id]
     try:
+        # Result queue chi phuc vu viewer live. Neu viewer doc cham hon worker,
+        # bo ket qua cu nhat trong shard de tranh viewer bi xem backlog cu.
+        current_size = result_queue.len()
+        drop_count = max(0, current_size - RESULT_QUEUE_LIMIT + 1)
+        if drop_count:
+            result_queue.get_many(drop_count, block=False)
         result_queue.put(result, block=False)
     except queue.Full:
         pass

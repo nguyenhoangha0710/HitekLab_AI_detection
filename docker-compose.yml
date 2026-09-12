@@ -23,7 +23,7 @@ services:
       - -stream_loop
       - "-1"
       - -i
-      - /videos/dummy_video_1.mp4
+      - /videos/stole.mp4
       - -an
       - -c:v
       - libx264

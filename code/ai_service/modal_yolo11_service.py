@@ -4,17 +4,20 @@ import queue
 import modal
 
 from modal_ai.results import latest_results_snapshot, publish_result
-from modal_ai.runtime import app, frame_queues, image, result_queue, state_store
+from modal_ai.runtime import app, frame_queues, image, result_queues, state_store
 from modal_ai.settings import (
     API_WEBSOCKET_TIMEOUT_SECONDS,
     APP_NAME,
     DEFAULT_CONFIDENCE,
     DEFAULT_IMAGE_SIZE,
     DEFAULT_MODEL,
+    FRAME_QUEUE_LIMIT,
     FRAME_QUEUE_PREFIX,
     MAX_WORKER_DRAIN,
     NUM_SHARDS,
-    RESULT_QUEUE_NAME,
+    QUEUE_VERSION,
+    RESULT_QUEUE_LIMIT,
+    RESULT_QUEUE_PREFIX,
     STATE_DICT_NAME,
     WORKER_SPAWN_EVERY_N_FRAMES,
 )
@@ -38,7 +41,7 @@ class ModalYoloQueueWorker:
         result = draw_and_detect(self.model, payload)
         result["shard_id"] = shard_id
         result["worker_id"] = "ai-worker-{}".format(shard_id)
-        publish_result(result)
+        publish_result(result, shard_id)
         print(
             "Modal worker processed camera={} shard={} seq={} published=True".format(
                 result.get("camera_id"),
@@ -115,6 +118,71 @@ def api():
     def worker_active_key(shard_id: int) -> str:
         return "worker_active:{}".format(shard_id)
 
+    def frame_drop_key(shard_id: int) -> str:
+        return "frame_dropped:{}".format(shard_id)
+
+    async def clear_runtime_data_async(reason: str) -> None:
+        for frame_queue in frame_queues:
+            await frame_queue.clear.aio()
+        for result_queue in result_queues:
+            await result_queue.clear.aio()
+        await state_store.clear.aio()
+        print("Modal runtime queues cleared reason={}".format(reason))
+
+    async def trim_frame_queue_for_put_async(shard_id: int) -> int:
+        frame_queue = frame_queues[shard_id]
+        current_size = await frame_queue.len.aio()
+        drop_count = max(0, current_size - FRAME_QUEUE_LIMIT + 1)
+        if not drop_count:
+            return 0
+
+        dropped = await frame_queue.get_many.aio(drop_count, block=False)
+        dropped_count = len(dropped)
+        if dropped_count:
+            total_key = frame_drop_key(shard_id)
+            total_dropped = int(await state_store.get.aio(total_key) or 0) + dropped_count
+            await state_store.put.aio(total_key, total_dropped)
+            oldest = dropped[0] if isinstance(dropped[0], dict) else {}
+            newest = dropped[-1] if isinstance(dropped[-1], dict) else {}
+            print(
+                "MODAL_FRAME_QUEUE_DROP shard={} dropped={} oldest_seq={} newest_seq={} limit={} total_dropped={}".format(
+                    shard_id,
+                    dropped_count,
+                    oldest.get("sequence_number"),
+                    newest.get("sequence_number"),
+                    FRAME_QUEUE_LIMIT,
+                    total_dropped,
+                )
+            )
+        return dropped_count
+
+    def trim_frame_queue_for_put(shard_id: int) -> int:
+        frame_queue = frame_queues[shard_id]
+        current_size = frame_queue.len()
+        drop_count = max(0, current_size - FRAME_QUEUE_LIMIT + 1)
+        if not drop_count:
+            return 0
+
+        dropped = frame_queue.get_many(drop_count, block=False)
+        dropped_count = len(dropped)
+        if dropped_count:
+            total_key = frame_drop_key(shard_id)
+            total_dropped = int(state_store.get(total_key) or 0) + dropped_count
+            state_store[total_key] = total_dropped
+            oldest = dropped[0] if isinstance(dropped[0], dict) else {}
+            newest = dropped[-1] if isinstance(dropped[-1], dict) else {}
+            print(
+                "MODAL_FRAME_QUEUE_DROP shard={} dropped={} oldest_seq={} newest_seq={} limit={} total_dropped={}".format(
+                    shard_id,
+                    dropped_count,
+                    oldest.get("sequence_number"),
+                    newest.get("sequence_number"),
+                    FRAME_QUEUE_LIMIT,
+                    total_dropped,
+                )
+            )
+        return dropped_count
+
     async def spawn_worker_async(shard_id: int) -> bool:
         active_key = worker_active_key(shard_id)
         if await state_store.get.aio(active_key):
@@ -131,6 +199,7 @@ def api():
 
     async def enqueue_payload_async(payload: dict) -> bool:
         shard_id = int(payload["shard_id"])
+        await trim_frame_queue_for_put_async(shard_id)
         await frame_queues[shard_id].put.aio(payload, block=False)
         sequence_number = int(payload["sequence_number"])
         worker_spawned = sequence_number <= 1 or sequence_number % WORKER_SPAWN_EVERY_N_FRAMES == 0
@@ -142,6 +211,7 @@ def api():
 
     def enqueue_payload(payload: dict) -> bool:
         shard_id = int(payload["shard_id"])
+        trim_frame_queue_for_put(shard_id)
         frame_queues[shard_id].put(payload, block=False)
         sequence_number = int(payload["sequence_number"])
         worker_spawned = sequence_number <= 1 or sequence_number % WORKER_SPAWN_EVERY_N_FRAMES == 0
@@ -164,9 +234,12 @@ def api():
             "status": "ok",
             "service": APP_NAME,
             "queue_backend": "modal_queue_shards",
+            "queue_version": QUEUE_VERSION,
             "num_shards": NUM_SHARDS,
+            "frame_queue_limit": FRAME_QUEUE_LIMIT,
+            "result_queue_limit": RESULT_QUEUE_LIMIT,
             "frame_queues": [frame_queue_name(FRAME_QUEUE_PREFIX, shard_id) for shard_id in range(NUM_SHARDS)],
-            "result_queue": RESULT_QUEUE_NAME,
+            "result_queues": [frame_queue_name(RESULT_QUEUE_PREFIX, shard_id) for shard_id in range(NUM_SHARDS)],
             "state": STATE_DICT_NAME,
             "timestamp": utc_iso(),
         }
@@ -175,14 +248,32 @@ def api():
     def queues():
         return {
             "backend": "modal_queue_shards",
+            "queue_version": QUEUE_VERSION,
             "num_shards": NUM_SHARDS,
+            "frame_queue_limit": FRAME_QUEUE_LIMIT,
+            "result_queue_limit": RESULT_QUEUE_LIMIT,
             "frame_queues": [frame_queue_name(FRAME_QUEUE_PREFIX, shard_id) for shard_id in range(NUM_SHARDS)],
+            "result_queues": [frame_queue_name(RESULT_QUEUE_PREFIX, shard_id) for shard_id in range(NUM_SHARDS)],
+            "frame_queue_lengths": {
+                str(shard_id): frame_queues[shard_id].len() for shard_id in range(NUM_SHARDS)
+            },
+            "result_queue_lengths": {
+                str(shard_id): result_queues[shard_id].len() for shard_id in range(NUM_SHARDS)
+            },
+            "frame_dropped": {
+                str(shard_id): int(state_store.get(frame_drop_key(shard_id)) or 0) for shard_id in range(NUM_SHARDS)
+            },
             "active_workers": {
                 str(shard_id): bool(state_store.get(worker_active_key(shard_id))) for shard_id in range(NUM_SHARDS)
             },
-            "message": "Modal Queue does not expose exact queue length statistics.",
+            "message": "Frame/result queues are FIFO-limited per shard for live demo latency control.",
             "timestamp": utc_iso(),
         }
+
+    @web.post("/admin/clear-queues")
+    async def clear_queues():
+        await clear_runtime_data_async("manual_admin_clear")
+        return {"status": "cleared", "queue_version": QUEUE_VERSION, "timestamp": utc_iso()}
 
     @web.post("/ingest", status_code=202)
     def ingest(payload: dict):
@@ -208,6 +299,7 @@ def api():
     @web.websocket("/ws/ingest")
     async def websocket_ingest(websocket: WebSocket):
         await websocket.accept()
+        await clear_runtime_data_async("websocket_ingest_start")
         accepted = 0
         try:
             while True:
@@ -236,18 +328,28 @@ def api():
                     )
         except WebSocketDisconnect:
             return
+        finally:
+            await clear_runtime_data_async("websocket_ingest_disconnect")
 
-    @web.websocket("/ws/results")
-    async def websocket_results(websocket: WebSocket):
+    def snapshot_for_shard(shard_id: int):
+        return [result for result in latest_results_snapshot() if int(result.get("shard_id", -1)) == shard_id]
+
+    @web.websocket("/ws/results/shards/{shard_id}")
+    async def websocket_results_shard(websocket: WebSocket, shard_id: int):
         await websocket.accept()
+        if shard_id < 0 or shard_id >= NUM_SHARDS:
+            await websocket.send_json({"type": "error", "detail": "Invalid shard_id", "timestamp": utc_iso()})
+            await websocket.close()
+            return
+
         try:
-            snapshot = await asyncio.to_thread(latest_results_snapshot)
+            snapshot = await asyncio.to_thread(snapshot_for_shard, shard_id)
             for result in snapshot:
                 await websocket.send_json({"type": "frame", "frame": result, "snapshot": True, "timestamp": utc_iso()})
 
             while True:
                 try:
-                    result = await result_queue.get.aio(block=False)
+                    result = await result_queues[shard_id].get.aio(block=False)
                 except queue.Empty:
                     await asyncio.sleep(0.05)
                     continue
@@ -257,6 +359,37 @@ def api():
                     continue
 
                 await websocket.send_json({"type": "frame", "frame": result, "timestamp": utc_iso()})
+        except WebSocketDisconnect:
+            return
+
+    @web.websocket("/ws/results")
+    async def websocket_results(websocket: WebSocket):
+        await websocket.accept()
+        try:
+            snapshot = await asyncio.to_thread(latest_results_snapshot)
+            for result in snapshot:
+                await websocket.send_json({"type": "frame", "frame": result, "snapshot": True, "timestamp": utc_iso()})
+
+            shard_cursor = 0
+            while True:
+                delivered = False
+                for offset in range(NUM_SHARDS):
+                    shard_id = (shard_cursor + offset) % NUM_SHARDS
+                    try:
+                        result = await result_queues[shard_id].get.aio(block=False)
+                    except queue.Empty:
+                        continue
+
+                    if result is None:
+                        continue
+
+                    shard_cursor = (shard_id + 1) % NUM_SHARDS
+                    delivered = True
+                    await websocket.send_json({"type": "frame", "frame": result, "timestamp": utc_iso()})
+                    break
+
+                if not delivered:
+                    await asyncio.sleep(0.05)
         except WebSocketDisconnect:
             return
 

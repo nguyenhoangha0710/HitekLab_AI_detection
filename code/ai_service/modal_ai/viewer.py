@@ -20,6 +20,18 @@ VIEWER_HTML = """
       const grid = document.getElementById("grid");
       const status = document.getElementById("status");
       const sections = new Map();
+      let connectedShards = 0;
+
+      async function loadShardCount() {
+        try {
+          const response = await fetch("/health", { cache: "no-store" });
+          const health = await response.json();
+          return Number(health.num_shards || 1);
+        } catch {
+          return 1;
+        }
+      }
+
       function ensure(frame) {
         let state = sections.get(frame.camera_id);
         if (state) return state;
@@ -41,11 +53,12 @@ VIEWER_HTML = """
         s.meta.textContent = `seq ${frame.sequence_number} | shard ${shard} | ${worker} | detections ${frame.detection_count} | inference ${frame.inference_ms}ms | ${frame.modal_processed_at}`;
         if (frame.image_b64) s.img.src = "data:image/jpeg;base64," + frame.image_b64;
       }
-      function connectResults() {
+      function connectShardResults(shardId, shardCount) {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const socket = new WebSocket(`${protocol}//${window.location.host}/ws/results`);
+        const socket = new WebSocket(`${protocol}//${window.location.host}/ws/results/shards/${shardId}`);
         socket.onopen = () => {
-          status.textContent = "Result WebSocket connected. Waiting for processed frames...";
+          connectedShards += 1;
+          status.textContent = `Result WebSocket connected ${connectedShards}/${shardCount}. Waiting for processed frames...`;
         };
         socket.onmessage = (event) => {
           const message = JSON.parse(event.data);
@@ -55,15 +68,22 @@ VIEWER_HTML = """
           }
         };
         socket.onclose = () => {
-          status.textContent = "Result WebSocket disconnected. Reconnecting...";
-          setTimeout(connectResults, 1000);
+          connectedShards = Math.max(0, connectedShards - 1);
+          status.textContent = `Shard ${shardId} result WebSocket disconnected. Reconnecting...`;
+          setTimeout(() => connectShardResults(shardId, shardCount), 1000);
         };
         socket.onerror = () => {
-          status.textContent = "Result WebSocket error.";
+          status.textContent = `Shard ${shardId} result WebSocket error.`;
           socket.close();
         };
       }
-      connectResults();
+      async function startViewer() {
+        const shardCount = await loadShardCount();
+        for (let shardId = 0; shardId < shardCount; shardId += 1) {
+          connectShardResults(shardId, shardCount);
+        }
+      }
+      startViewer();
     </script>
   </body>
 </html>
