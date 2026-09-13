@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hitek Zone Management</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <h1>Zone Console</h1>
+          <p>Camera & Zone Management</p>
+        </div>
+        <div class="camera-list" id="cameraList"></div>
+      </aside>
+
+      <section class="workspace">
+        <header class="toolbar">
+          <div class="tabs">
+            <button class="tab active" data-tab="live">Live Cameras</button>
+            <button class="tab" data-tab="yolo">YOLO Detection</button>
+            <button class="tab" data-tab="zone">Zone Editor</button>
+          </div>
+          <div class="status" id="statusText">Loading cameras...</div>
+        </header>
+
+        <main class="content">
+          <section class="panel active" id="livePanel">
+            <div class="camera-grid" id="cameraGrid"></div>
+          </section>
+
+          <section class="panel" id="yoloPanel">
+            <div class="camera-grid" id="yoloGrid"></div>
+          </section>
+
+          <section class="panel" id="zonePanel">
+            <div class="editor-layout">
+              <section class="editor-main">
+                <div class="editor-head">
+                  <div>
+                    <h2 id="selectedCameraName">Select a camera</h2>
+                    <p id="selectedCameraMeta">No camera selected</p>
+                  </div>
+                  <button class="primary" id="captureButton">Capture Frame</button>
+                </div>
+
+                <div class="canvas-wrap">
+                  <canvas id="zoneCanvas"></canvas>
+                  <div class="empty-state" id="emptyState">Capture a reference frame to edit zones.</div>
+                </div>
+              </section>
+
+              <aside class="editor-side">
+                <label>
+                  Zone name
+                  <input id="zoneName" value="Restricted Zone">
+                </label>
+
+                <label>
+                  Zone type
+                  <select id="zoneType">
+                    <option value="restricted_area">Restricted Area</option>
+                    <option value="entry_line">Entry Line</option>
+                    <option value="crowd_area">Crowd Area</option>
+                    <option value="parking_area">Parking Area</option>
+                  </select>
+                </label>
+
+                <div class="actions">
+                  <button id="undoButton">Undo Point</button>
+                  <button id="clearButton">Clear</button>
+                  <button class="primary" id="saveZoneButton">Save Zone</button>
+                </div>
+
+                <div class="zone-list-head">
+                  <h3>Saved Zones</h3>
+                  <span id="pointCount">0 points</span>
+                </div>
+                <div class="zone-list" id="zoneList"></div>
+              </aside>
+            </div>
+          </section>
+        </main>
+      </section>
+    </div>
+
+    <script src="/static/app.js?v=sync-yolo-frame-v2"></script>
+  </body>
+</html>
