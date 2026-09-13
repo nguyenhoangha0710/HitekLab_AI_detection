@@ -1,6 +1,14 @@
 import modal
 
-from .settings import APP_NAME, FRAME_QUEUE_PREFIX, NUM_SHARDS, RESULT_QUEUE_PREFIX, STATE_DICT_NAME
+from .settings import (
+    APP_NAME,
+    FRAME_QUEUE_PREFIX,
+    NUM_SHARDS,
+    QUEUE_VERSION,
+    RESULT_QUEUE_PREFIX,
+    STATE_DICT_NAME,
+    VIEWER_CAMERA_IDS,
+)
 from .sharding import frame_queue_name
 
 
@@ -8,7 +16,13 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("libgl1", "libglib2.0-0")
     .pip_install("fastapi[standard]", "opencv-python-headless", "numpy", "ultralytics")
-    .env({"YOLO_CONFIG_DIR": "/tmp/Ultralytics"})
+    .env(
+        {
+            "YOLO_CONFIG_DIR": "/tmp/Ultralytics",
+            "MODAL_QUEUE_VERSION_FIXED": QUEUE_VERSION,
+            "MODAL_VIEWER_CAMERA_IDS": ",".join(VIEWER_CAMERA_IDS),
+        }
+    )
     .add_local_python_source("modal_ai")
 )
 

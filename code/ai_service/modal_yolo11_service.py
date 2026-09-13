@@ -1,5 +1,9 @@
 import base64
+import atexit
+import os
 import queue
+import sys
+import time
 
 import modal
 
@@ -13,21 +17,75 @@ from modal_ai.settings import (
     DEFAULT_MODEL,
     FRAME_QUEUE_LIMIT,
     FRAME_QUEUE_PREFIX,
-    MAX_WORKER_DRAIN,
     NUM_SHARDS,
     QUEUE_VERSION,
     RESULT_QUEUE_LIMIT,
     RESULT_QUEUE_PREFIX,
+    SHARD_WORKER_IDLE_TIMEOUT_SECONDS,
+    SHARD_WORKER_POLL_TIMEOUT_SECONDS,
     STATE_DICT_NAME,
-    WORKER_SPAWN_EVERY_N_FRAMES,
+    VIEWER_CAMERA_IDS,
 )
 from modal_ai.sharding import frame_queue_name, shard_id_for_camera
 from modal_ai.time_utils import utc_iso
-from modal_ai.viewer import VIEWER_HTML
+from modal_ai.viewer import CAMERA_VIEWER_HTML, VIEWER_HTML
 from modal_ai.yolo import draw_and_detect
 
 
-@app.cls(image=image, gpu="T4", timeout=300, scaledown_window=300, max_containers=NUM_SHARDS)
+def _is_local_modal_serve_process() -> bool:
+    return os.getenv("MODAL_IS_REMOTE") != "1" and "serve" in sys.argv
+
+
+def _clear_runtime_data_sync(reason: str) -> None:
+    for frame_queue in frame_queues:
+        frame_queue.clear()
+    for result_queue in result_queues:
+        result_queue.clear()
+    state_store.clear()
+    print("Modal runtime queues cleared version={} reason={}".format(QUEUE_VERSION, reason))
+
+
+def _delete_runtime_objects_sync(reason: str) -> None:
+    queue_names = [
+        frame_queue_name(FRAME_QUEUE_PREFIX, shard_id)
+        for shard_id in range(NUM_SHARDS)
+    ] + [
+        frame_queue_name(RESULT_QUEUE_PREFIX, shard_id)
+        for shard_id in range(NUM_SHARDS)
+    ]
+    for queue_name in queue_names:
+        modal.Queue.objects.delete(queue_name, allow_missing=True)
+    modal.Dict.objects.delete(STATE_DICT_NAME, allow_missing=True)
+    print(
+        "Modal runtime queue objects deleted version={} reason={} queues={} state={}".format(
+            QUEUE_VERSION,
+            reason,
+            ",".join(queue_names),
+            STATE_DICT_NAME,
+        )
+    )
+
+
+def _clear_runtime_data_on_local_exit() -> None:
+    try:
+        _delete_runtime_objects_sync("local_modal_serve_exit")
+    except Exception as exc:
+        print("Modal runtime queue delete failed version={} error={}".format(QUEUE_VERSION, exc))
+        try:
+            _clear_runtime_data_sync("local_modal_serve_exit_fallback_clear")
+        except Exception as fallback_exc:
+            print("Modal runtime queue fallback clear failed version={} error={}".format(QUEUE_VERSION, fallback_exc))
+
+
+if _is_local_modal_serve_process():
+    try:
+        _delete_runtime_objects_sync("local_modal_serve_start")
+    except Exception as exc:
+        print("Modal runtime queue start delete skipped version={} error={}".format(QUEUE_VERSION, exc))
+    atexit.register(_clear_runtime_data_on_local_exit)
+
+
+@app.cls(image=image, gpu="L4", timeout=API_WEBSOCKET_TIMEOUT_SECONDS, scaledown_window=300, max_containers=NUM_SHARDS)
 class ModalYoloQueueWorker:
     model_name: str = modal.parameter(default=DEFAULT_MODEL)
 
@@ -43,7 +101,8 @@ class ModalYoloQueueWorker:
         result["worker_id"] = "ai-worker-{}".format(shard_id)
         publish_result(result, shard_id)
         print(
-            "Modal worker processed camera={} shard={} seq={} published=True".format(
+            "Modal worker processed version={} camera={} shard={} seq={} published=True".format(
+                QUEUE_VERSION,
                 result.get("camera_id"),
                 shard_id,
                 result.get("sequence_number"),
@@ -57,28 +116,65 @@ class ModalYoloQueueWorker:
         return self._process_payload_internal(payload, shard_id)
 
     @modal.method()
-    def process_next(self, shard_id: int = 0, max_items: int = MAX_WORKER_DRAIN) -> dict:
+    def run_shard_loop(self, shard_id: int = 0, idle_timeout_seconds: float = SHARD_WORKER_IDLE_TIMEOUT_SECONDS) -> dict:
         processed = 0
         skipped = 0
         last_result = None
         active_key = "worker_active:{}".format(shard_id)
+        heartbeat_key = "worker_heartbeat:{}".format(shard_id)
+        last_frame_at = time.monotonic()
+        state_store[active_key] = True
+        state_store[heartbeat_key] = utc_iso()
+        print(
+            "Modal shard worker started version={} shard={} worker=ai-worker-{}".format(
+                QUEUE_VERSION,
+                shard_id,
+                shard_id,
+            )
+        )
         try:
-            while processed < max(1, max_items):
+            while True:
                 try:
-                    payload = frame_queues[shard_id].get(block=False)
+                    payload = frame_queues[shard_id].get(
+                        block=True,
+                        timeout=SHARD_WORKER_POLL_TIMEOUT_SECONDS,
+                    )
                 except queue.Empty:
-                    break
+                    payload = None
 
                 if payload is None:
-                    break
+                    if time.monotonic() - last_frame_at >= idle_timeout_seconds:
+                        break
+                    state_store[heartbeat_key] = utc_iso()
+                    continue
                 if not isinstance(payload, dict):
                     skipped += 1
                     continue
 
+                last_frame_at = time.monotonic()
+                state_store[heartbeat_key] = utc_iso()
+                print(
+                    "Modal worker claimed version={} camera={} shard={} seq={} worker=ai-worker-{}".format(
+                        QUEUE_VERSION,
+                        payload.get("camera_id"),
+                        shard_id,
+                        payload.get("sequence_number"),
+                        shard_id,
+                    )
+                )
                 last_result = self._process_payload_internal(payload, shard_id)
                 processed += 1
         finally:
             state_store[active_key] = False
+            state_store[heartbeat_key] = utc_iso()
+            print(
+                "Modal shard worker stopped version={} shard={} processed={} skipped={}".format(
+                    QUEUE_VERSION,
+                    shard_id,
+                    processed,
+                    skipped,
+                )
+            )
 
         return {
             "status": "processed" if processed else "empty",
@@ -127,7 +223,7 @@ def api():
         for result_queue in result_queues:
             await result_queue.clear.aio()
         await state_store.clear.aio()
-        print("Modal runtime queues cleared reason={}".format(reason))
+        print("Modal runtime queues cleared version={} reason={}".format(QUEUE_VERSION, reason))
 
     async def trim_frame_queue_for_put_async(shard_id: int) -> int:
         frame_queue = frame_queues[shard_id]
@@ -145,10 +241,13 @@ def api():
             oldest = dropped[0] if isinstance(dropped[0], dict) else {}
             newest = dropped[-1] if isinstance(dropped[-1], dict) else {}
             print(
-                "MODAL_FRAME_QUEUE_DROP shard={} dropped={} oldest_seq={} newest_seq={} limit={} total_dropped={}".format(
+                "MODAL_FRAME_QUEUE_DROP version={} shard={} dropped={} oldest_camera={} oldest_seq={} newest_camera={} newest_seq={} limit={} total_dropped={}".format(
+                    QUEUE_VERSION,
                     shard_id,
                     dropped_count,
+                    oldest.get("camera_id"),
                     oldest.get("sequence_number"),
+                    newest.get("camera_id"),
                     newest.get("sequence_number"),
                     FRAME_QUEUE_LIMIT,
                     total_dropped,
@@ -172,10 +271,13 @@ def api():
             oldest = dropped[0] if isinstance(dropped[0], dict) else {}
             newest = dropped[-1] if isinstance(dropped[-1], dict) else {}
             print(
-                "MODAL_FRAME_QUEUE_DROP shard={} dropped={} oldest_seq={} newest_seq={} limit={} total_dropped={}".format(
+                "MODAL_FRAME_QUEUE_DROP version={} shard={} dropped={} oldest_camera={} oldest_seq={} newest_camera={} newest_seq={} limit={} total_dropped={}".format(
+                    QUEUE_VERSION,
                     shard_id,
                     dropped_count,
+                    oldest.get("camera_id"),
                     oldest.get("sequence_number"),
+                    newest.get("camera_id"),
                     newest.get("sequence_number"),
                     FRAME_QUEUE_LIMIT,
                     total_dropped,
@@ -183,50 +285,51 @@ def api():
             )
         return dropped_count
 
-    async def spawn_worker_async(shard_id: int) -> bool:
+    async def ensure_shard_worker_async(shard_id: int) -> bool:
         active_key = worker_active_key(shard_id)
         if await state_store.get.aio(active_key):
             return False
         await state_store.put.aio(active_key, True)
         try:
-            await ModalYoloQueueWorker(model_name=DEFAULT_MODEL).process_next.spawn.aio(shard_id, MAX_WORKER_DRAIN)
+            await ModalYoloQueueWorker(model_name=DEFAULT_MODEL).run_shard_loop.spawn.aio(
+                shard_id,
+                SHARD_WORKER_IDLE_TIMEOUT_SECONDS,
+            )
             return True
         except Exception:
-            # Worker spawn loi khong duoc lam dut WebSocket ingest. Frame van da
-            # nam trong shard queue, frame sau se tiep tuc kich hoat worker.
             await state_store.put.aio(active_key, False)
             return False
+
+    async def ensure_all_shard_workers_async() -> None:
+        for shard_id in range(NUM_SHARDS):
+            await ensure_shard_worker_async(shard_id)
 
     async def enqueue_payload_async(payload: dict) -> bool:
         shard_id = int(payload["shard_id"])
         await trim_frame_queue_for_put_async(shard_id)
         await frame_queues[shard_id].put.aio(payload, block=False)
-        sequence_number = int(payload["sequence_number"])
-        worker_spawned = sequence_number <= 1 or sequence_number % WORKER_SPAWN_EVERY_N_FRAMES == 0
-        if worker_spawned:
-            # Khong await spawn trong receive loop, neu khong TCP/WebSocket bi
-            # backpressure va Edge Gateway se gui frame cham hon target_fps.
-            asyncio.create_task(spawn_worker_async(shard_id))
-        return worker_spawned
+        return await ensure_shard_worker_async(shard_id)
+
+    def ensure_shard_worker(shard_id: int) -> bool:
+        active_key = worker_active_key(shard_id)
+        if state_store.get(active_key):
+            return False
+        state_store[active_key] = True
+        try:
+            ModalYoloQueueWorker(model_name=DEFAULT_MODEL).run_shard_loop.spawn(
+                shard_id,
+                SHARD_WORKER_IDLE_TIMEOUT_SECONDS,
+            )
+            return True
+        except Exception:
+            state_store[active_key] = False
+            raise
 
     def enqueue_payload(payload: dict) -> bool:
         shard_id = int(payload["shard_id"])
         trim_frame_queue_for_put(shard_id)
         frame_queues[shard_id].put(payload, block=False)
-        sequence_number = int(payload["sequence_number"])
-        worker_spawned = sequence_number <= 1 or sequence_number % WORKER_SPAWN_EVERY_N_FRAMES == 0
-        if worker_spawned:
-            active_key = worker_active_key(shard_id)
-            if not state_store.get(active_key):
-                state_store[active_key] = True
-                try:
-                    ModalYoloQueueWorker(model_name=DEFAULT_MODEL).process_next.spawn(shard_id, MAX_WORKER_DRAIN)
-                except Exception:
-                    state_store[active_key] = False
-                    raise
-            else:
-                worker_spawned = False
-        return worker_spawned
+        return ensure_shard_worker(shard_id)
 
     @web.get("/health")
     def health():
@@ -266,6 +369,9 @@ def api():
             "active_workers": {
                 str(shard_id): bool(state_store.get(worker_active_key(shard_id))) for shard_id in range(NUM_SHARDS)
             },
+            "worker_heartbeats": {
+                str(shard_id): state_store.get("worker_heartbeat:{}".format(shard_id)) for shard_id in range(NUM_SHARDS)
+            },
             "message": "Frame/result queues are FIFO-limited per shard for live demo latency control.",
             "timestamp": utc_iso(),
         }
@@ -279,7 +385,7 @@ def api():
     def ingest(payload: dict):
         try:
             payload = normalize_payload(payload)
-            worker_spawned = enqueue_payload(payload)
+            worker_started = enqueue_payload(payload)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except queue.Full as exc:
@@ -291,7 +397,7 @@ def api():
             "frame_id": payload["frame_id"],
             "sequence_number": payload["sequence_number"],
             "shard_id": payload["shard_id"],
-            "worker_spawned": worker_spawned,
+            "worker_started": worker_started,
             "modal_received_at": payload["modal_received_at"],
         }
 
@@ -300,13 +406,14 @@ def api():
     async def websocket_ingest(websocket: WebSocket):
         await websocket.accept()
         await clear_runtime_data_async("websocket_ingest_start")
+        await ensure_all_shard_workers_async()
         accepted = 0
         try:
             while True:
                 payload = await websocket.receive_json()
                 try:
                     payload = normalize_payload(payload)
-                    worker_spawned = await enqueue_payload_async(payload)
+                    worker_started = await enqueue_payload_async(payload)
                 except Exception as exc:
                     if isinstance(payload, dict) and payload.get("ack"):
                         await websocket.send_json({"type": "error", "detail": str(exc), "timestamp": utc_iso()})
@@ -321,15 +428,13 @@ def api():
                             "frame_id": payload["frame_id"],
                             "sequence_number": payload["sequence_number"],
                             "shard_id": payload["shard_id"],
-                            "worker_spawned": worker_spawned,
+                            "worker_started": worker_started,
                             "accepted": accepted,
                             "timestamp": utc_iso(),
                         }
                     )
         except WebSocketDisconnect:
             return
-        finally:
-            await clear_runtime_data_async("websocket_ingest_disconnect")
 
     def snapshot_for_shard(shard_id: int):
         return [result for result in latest_results_snapshot() if int(result.get("shard_id", -1)) == shard_id]
@@ -408,6 +513,21 @@ def api():
     @web.get("/viewer")
     def viewer():
         return HTMLResponse(VIEWER_HTML)
+
+    @web.get("/viewer/cameras")
+    def viewer_cameras():
+        cameras = [
+            {
+                "camera_id": camera_id,
+                "shard_id": shard_id_for_camera(camera_id, NUM_SHARDS),
+            }
+            for camera_id in VIEWER_CAMERA_IDS
+        ]
+        return {"cameras": cameras, "count": len(cameras), "timestamp": utc_iso()}
+
+    @web.get("/viewer/camera/{camera_id}")
+    def viewer_camera(camera_id: str):
+        return HTMLResponse(CAMERA_VIEWER_HTML)
 
     return web
 

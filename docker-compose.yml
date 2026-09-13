@@ -23,7 +23,7 @@ services:
       - -stream_loop
       - "-1"
       - -i
-      - /videos/stole.mp4
+      - /videos/neighbors_yard.ts
       - -an
       - -c:v
       - libx264
@@ -82,10 +82,14 @@ services:
     environment:
       MODAL_INGEST_URL: ${MODAL_INGEST_URL:-}
       MODAL_WS_URL: ${MODAL_WS_URL:-}
-      MODAL_TRANSPORT: "websocket"
+      MODAL_TRANSPORT: ${MODAL_TRANSPORT:-websocket}
       MODAL_INGEST_TIMEOUT_SECONDS: "10"
+      EDGE_VIEWER_HOST: "0.0.0.0"
+      EDGE_VIEWER_PORT: "8002"
       YOLO_CLASSES: "person,car"
       YOLO_CONFIDENCE: "0.35"
       TENANT_ID: ${TENANT_ID:-demo-tenant}
+    ports:
+      - "8002:8002"
     command: ["python", "-m", "edge_gateway.main", "--config", "config.docker.yaml"]
     restart: unless-stopped

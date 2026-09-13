@@ -26,4 +26,4 @@ COPY modal_yolo11_service.py .
 COPY config.yaml .
 COPY config.docker.yaml .
 
-EXPOSE 8001
+EXPOSE 8001 8002
