@@ -3,3 +3,4 @@ uvicorn
 pyyaml
 opencv-python-headless
 numpy
+psycopg[binary]

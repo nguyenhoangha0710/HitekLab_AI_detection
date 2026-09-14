@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 def project_root() -> Path:
@@ -14,6 +15,7 @@ class ZoneServiceSettings:
     camera_config_path: Path
     edge_gateway_base_url: str
     tenant_id: str
+    database_url: Optional[str] = None
 
 
 def load_settings() -> ZoneServiceSettings:
@@ -31,4 +33,5 @@ def load_settings() -> ZoneServiceSettings:
         camera_config_path=camera_config_path,
         edge_gateway_base_url=os.getenv("EDGE_GATEWAY_BASE_URL", "http://localhost:8002").rstrip("/"),
         tenant_id=os.getenv("TENANT_ID", "demo-tenant"),
+        database_url=os.getenv("DATABASE_URL"),
     )

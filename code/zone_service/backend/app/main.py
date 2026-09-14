@@ -14,13 +14,13 @@ from .services.camera_catalog_service import CameraCatalogService
 
 def create_app() -> FastAPI:
     settings = load_settings()
-    database = Database(settings.database_path)
+    database = Database(settings.database_path, settings.database_url)
     database.initialize()
     settings.reference_frame_dir.mkdir(parents=True, exist_ok=True)
 
     with database.session() as connection:
         cameras = CameraCatalogService(settings.camera_config_path).load_cameras()
-        CameraRepository(connection).seed_from_config(settings.tenant_id, cameras)
+        CameraRepository(connection, database).seed_from_config(settings.tenant_id, cameras)
 
     app = FastAPI(title="Hitek Zone Management Service")
     app.include_router(create_camera_router(database, settings))
@@ -35,7 +35,8 @@ def create_app() -> FastAPI:
         return {
             "status": "ok",
             "service": "zone-management-service",
-            "database": str(settings.database_path),
+            "database_backend": database.backend,
+            "database": "postgres" if database.backend == "postgres" else str(settings.database_path),
             "edge_gateway_base_url": settings.edge_gateway_base_url,
         }
 

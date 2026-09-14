@@ -1,6 +1,25 @@
 name: hitek-ai-iot
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hitek-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hitek_ai_iot}
+      POSTGRES_USER: ${POSTGRES_USER:-hitek_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hitek_app_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./code/database/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hitek_app} -d ${POSTGRES_DB:-hitek_ai_iot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   mediamtx:
     image: bluenviron/mediamtx:latest
     container_name: hitek-mediamtx
@@ -106,9 +125,12 @@ services:
       dockerfile: code/zone_service/Dockerfile
     container_name: hitek-zone-service
     depends_on:
+      postgres:
+        condition: service_healthy
       edge-gateway:
         condition: service_started
     environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-hitek_app}:${POSTGRES_PASSWORD:-hitek_app_password}@postgres:5432/${POSTGRES_DB:-hitek_ai_iot}"
       EDGE_GATEWAY_BASE_URL: "http://edge-gateway:8002"
       ZONE_CAMERA_CONFIG_PATH: "/app/code/ai_service/config.docker.yaml"
       ZONE_DB_PATH: "/app/code/zone_service/data/zone_service.db"
@@ -121,4 +143,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres-data:
   zone-service-data:
