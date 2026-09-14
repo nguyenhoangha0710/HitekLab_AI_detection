@@ -186,21 +186,48 @@ async function saveZone() {
     return;
   }
 
+  const zoneName = uniqueZoneName(els.zoneName.value.trim() || defaultZoneName());
   const payload = {
-    name: els.zoneName.value.trim() || "Zone",
+    name: zoneName,
     zone_type: els.zoneType.value,
     polygon: { points: state.draftPoints },
     frame_width: state.referenceFrame.frame_width,
     frame_height: state.referenceFrame.frame_height,
     enabled: true,
   };
-  await api(`/api/cameras/${encodeURIComponent(state.selectedCameraId)}/zones`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  state.draftPoints = [];
-  await loadZones();
-  setStatus("Zone saved");
+  els.saveZoneButton.disabled = true;
+  try {
+    await api(`/api/cameras/${encodeURIComponent(state.selectedCameraId)}/zones`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    state.draftPoints = [];
+    await loadZones();
+    els.zoneName.value = uniqueZoneName(defaultZoneName());
+    setStatus(`Zone saved: ${zoneName}`);
+  } catch (error) {
+    setStatus(`Save zone failed: ${error.message}`);
+  } finally {
+    els.saveZoneButton.disabled = false;
+  }
+}
+
+function defaultZoneName() {
+  if (els.zoneType.value === "controlled_area") return "Controlled Zone";
+  return "Restricted Zone";
+}
+
+function uniqueZoneName(baseName) {
+  const existingNames = new Set(state.zones.map((zone) => String(zone.name || "").toLowerCase()));
+  if (!existingNames.has(baseName.toLowerCase())) return baseName;
+
+  let index = 2;
+  let candidate = `${baseName} ${index}`;
+  while (existingNames.has(candidate.toLowerCase())) {
+    index += 1;
+    candidate = `${baseName} ${index}`;
+  }
+  return candidate;
 }
 
 async function deleteZone(zoneId) {
@@ -346,7 +373,7 @@ function draw() {
   if (!state.referenceImage) return;
 
   ctx.drawImage(state.referenceImage, 0, 0, canvas.width, canvas.height);
-  state.zones.forEach((zone, index) => drawPolygon(ctx, zone.polygon.points, zoneColor(index), 0.18));
+  state.zones.forEach((zone) => drawPolygon(ctx, zone.polygon.points, zoneColor(zone), 0.18));
   drawPolygon(ctx, state.draftPoints, "#2dd4bf", 0.28);
   state.draftPoints.forEach((point) => drawHandle(ctx, point, "#2dd4bf"));
 }
@@ -371,17 +398,102 @@ function drawYoloOverlay(cameraId) {
   const frameHeight = image.naturalHeight || state.liveDetections[cameraId]?.frame_height || canvas.height;
   const viewport = containViewport(canvas.width, canvas.height, frameWidth, frameHeight);
 
-  (state.liveZones[cameraId] || []).forEach((zone, index) => {
-    const points = (zone.polygon.points || []).map((point) =>
-      scalePoint(point, zone.frame_width, zone.frame_height, viewport)
-    );
-    drawPolygon(ctx, points, zoneColor(index), 0.16);
-    drawZoneLabel(ctx, points, zone.name, zoneColor(index));
+  const scaledZones = (state.liveZones[cameraId] || [])
+    .filter((zone) => zone.enabled !== false)
+    .map((zone) => ({
+      ...zone,
+      scaledPoints: (zone.polygon.points || []).map((point) =>
+        scalePoint(point, zone.frame_width, zone.frame_height, viewport)
+      ),
+    }));
+
+  scaledZones.forEach((zone) => {
+    const color = zoneColor(zone);
+    drawPolygon(ctx, zone.scaledPoints, color, 0.16);
+    drawZoneLabel(ctx, zone.scaledPoints, zone.name, color);
   });
 
   const result = state.liveDetections[cameraId];
   if (!result || !result.detections) return;
-  result.detections.forEach((detection) => drawDetection(ctx, detection, result.frame_width, result.frame_height, viewport));
+  result.detections.forEach((detection) => {
+    const bottomCenter = detectionBottomCenter(detection, result.frame_width, result.frame_height, viewport);
+    const matchedZones = scaledZones.filter((zone) => pointInPolygon(bottomCenter, zone.scaledPoints));
+    drawDetection(ctx, detection, result.frame_width, result.frame_height, viewport, {
+      bottomCenter,
+      matchedZones,
+    });
+  });
+}
+
+function detectionBottomCenter(detection, frameWidth, frameHeight, viewport) {
+  const box = detection.bbox_xyxy || [0, 0, 0, 0];
+  return scalePoint(
+    {
+      x: (Number(box[0] || 0) + Number(box[2] || 0)) / 2,
+      y: Number(box[3] || 0),
+    },
+    frameWidth,
+    frameHeight,
+    viewport
+  );
+}
+
+function pointInPolygon(point, polygon) {
+  if (!polygon || polygon.length < 3) return false;
+  let inside = false;
+  for (let current = 0, previous = polygon.length - 1; current < polygon.length; previous = current++) {
+    const currentPoint = polygon[current];
+    const previousPoint = polygon[previous];
+    const intersects =
+      currentPoint.y > point.y !== previousPoint.y > point.y &&
+      point.x <
+        ((previousPoint.x - currentPoint.x) * (point.y - currentPoint.y)) /
+          (previousPoint.y - currentPoint.y) +
+          currentPoint.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function zoneColor(zone) {
+  if (!zone) return "#60a5fa";
+  if (zone.zone_type === "restricted_area") return "#ef4444";
+  if (zone.zone_type === "controlled_area") return "#3b82f6";
+  return "#60a5fa";
+}
+
+function zoneTypeLabel(zoneType) {
+  if (zoneType === "restricted_area") return "Restricted";
+  if (zoneType === "controlled_area") return "Controlled";
+  return zoneType || "Zone";
+}
+
+function matchedZoneLabel(matchedZones) {
+  if (!matchedZones.length) return "";
+  return matchedZones.map((zone) => zoneTypeLabel(zone.zone_type)).join(", ");
+}
+
+function drawBottomCenter(ctx, point, matched) {
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, matched ? 5 : 4, 0, Math.PI * 2);
+  ctx.fillStyle = matched ? "#ef4444" : "#f8fafc";
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = matched ? "#fee2e2" : "#0f172a";
+  ctx.stroke();
+}
+
+function drawMatchLabel(ctx, point, label) {
+  if (!label) return;
+  ctx.font = "11px Arial";
+  const text = `in ${label}`;
+  const textWidth = ctx.measureText(text).width + 8;
+  const x = point.x + 7;
+  const y = Math.max(18, point.y - 8);
+  ctx.fillStyle = "rgba(239, 68, 68, 0.9)";
+  ctx.fillRect(x, y - 14, textWidth, 16);
+  ctx.fillStyle = "#fff7ed";
+  ctx.fillText(text, x + 4, y - 2);
 }
 
 function containViewport(canvasWidth, canvasHeight, frameWidth, frameHeight) {
@@ -403,12 +515,14 @@ function scalePoint(point, frameWidth, frameHeight, viewport) {
   };
 }
 
-function drawDetection(ctx, detection, frameWidth, frameHeight, viewport) {
+function drawDetection(ctx, detection, frameWidth, frameHeight, viewport, match = {}) {
   const box = detection.bbox_xyxy || [0, 0, 0, 0];
   const p1 = scalePoint({ x: box[0], y: box[1] }, frameWidth, frameHeight, viewport);
   const p2 = scalePoint({ x: box[2], y: box[3] }, frameWidth, frameHeight, viewport);
   const color = detection.class_name === "car" ? "#38bdf8" : "#39ff14";
   const label = `${detection.class_name} ${Number(detection.confidence || 0).toFixed(2)}`;
+  const matched = Boolean(match.matchedZones && match.matchedZones.length);
+  const matchLabel = matchedZoneLabel(match.matchedZones || []);
 
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
@@ -420,6 +534,10 @@ function drawDetection(ctx, detection, frameWidth, frameHeight, viewport) {
   ctx.fillRect(p1.x, Math.max(0, p1.y - 18), textWidth, 18);
   ctx.fillStyle = "#06110f";
   ctx.fillText(label, p1.x + 4, Math.max(12, p1.y - 5));
+  if (match.bottomCenter) {
+    drawBottomCenter(ctx, match.bottomCenter, matched);
+    drawMatchLabel(ctx, match.bottomCenter, matchLabel);
+  }
 }
 
 function drawZoneLabel(ctx, points, label, color) {
@@ -459,10 +577,6 @@ function drawHandle(ctx, point, color) {
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#071110";
   ctx.stroke();
-}
-
-function zoneColor(index) {
-  return ["#60a5fa", "#f59e0b", "#f472b6", "#a3e635", "#c084fc"][index % 5];
 }
 
 function withAlpha(hex, alpha) {
