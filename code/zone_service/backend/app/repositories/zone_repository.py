@@ -4,6 +4,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from ..database import Database
+from .rule_config_repository import RuleConfigRepository
 from ..time_utils import utc_iso
 
 
@@ -49,7 +50,9 @@ class ZoneRepository:
                 now,
             ),
         )
-        return self.get(zone_id)
+        row = self.get(zone_id)
+        RuleConfigRepository(self.connection, self.database).create_defaults_for_zone(row)
+        return row
 
     def update(self, zone_id: str, payload: Dict[str, Any]) -> Optional[sqlite3.Row]:
         current = self.get(zone_id)

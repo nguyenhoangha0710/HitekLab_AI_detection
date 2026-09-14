@@ -71,11 +71,16 @@ CREATE TABLE IF NOT EXISTS rule_config (
     zone_id TEXT NOT NULL REFERENCES zone(id) ON DELETE CASCADE,
     rule_type TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
+    object_type TEXT,
     duration_threshold INTEGER,
     people_threshold INTEGER,
     confidence_threshold REAL,
+    use_active_time INTEGER NOT NULL DEFAULT 0,
+    active_start_time TEXT,
+    active_end_time TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    UNIQUE (zone_id, rule_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_location_tenant_id ON location(tenant_id);
@@ -150,6 +155,10 @@ class Database:
         self._add_sqlite_column_if_missing(connection, "camera", "tenant_id", "TEXT")
         self._add_sqlite_column_if_missing(connection, "zone", "tenant_id", "TEXT")
         self._add_sqlite_column_if_missing(connection, "rule_config", "tenant_id", "TEXT")
+        self._add_sqlite_column_if_missing(connection, "rule_config", "object_type", "TEXT")
+        self._add_sqlite_column_if_missing(connection, "rule_config", "use_active_time", "INTEGER NOT NULL DEFAULT 0")
+        self._add_sqlite_column_if_missing(connection, "rule_config", "active_start_time", "TEXT")
+        self._add_sqlite_column_if_missing(connection, "rule_config", "active_end_time", "TEXT")
         connection.execute(
             """
             UPDATE camera

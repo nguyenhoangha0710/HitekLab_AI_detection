@@ -138,11 +138,15 @@ CREATE TABLE IF NOT EXISTS rule_config (
     zone_id uuid NOT NULL,
     rule_type varchar(100) NOT NULL,
     enabled boolean NOT NULL DEFAULT true,
+    object_type varchar(100),
     duration_threshold integer CHECK (duration_threshold IS NULL OR duration_threshold >= 0),
     people_threshold integer CHECK (people_threshold IS NULL OR people_threshold >= 0),
     confidence_threshold double precision CHECK (
         confidence_threshold IS NULL OR (confidence_threshold >= 0 AND confidence_threshold <= 1)
     ),
+    use_active_time boolean NOT NULL DEFAULT false,
+    active_start_time time,
+    active_end_time time,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (zone_id, rule_type),

@@ -121,9 +121,13 @@ erDiagram
         uuid zone_id FK
         varchar rule_type
         boolean enabled
+        varchar object_type
         int duration_threshold
         int people_threshold
         float confidence_threshold
+        boolean use_active_time
+        time active_start_time
+        time active_end_time
         timestamptz created_at
         timestamptz updated_at
     }

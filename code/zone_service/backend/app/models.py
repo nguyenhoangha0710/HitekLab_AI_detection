@@ -67,3 +67,30 @@ class ZoneOut(BaseModel):
     enabled: bool
     created_at: str
     updated_at: str
+
+
+class RuleConfigUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    object_type: Optional[str] = Field(None, max_length=80)
+    duration_threshold: Optional[int] = Field(None, ge=0)
+    people_threshold: Optional[int] = Field(None, ge=0)
+    confidence_threshold: Optional[float] = Field(None, ge=0, le=1)
+    use_active_time: Optional[bool] = None
+    active_start_time: Optional[str] = Field(None, max_length=8)
+    active_end_time: Optional[str] = Field(None, max_length=8)
+
+
+class RuleConfigOut(BaseModel):
+    id: str
+    zone_id: str
+    rule_type: str
+    enabled: bool
+    object_type: Optional[str] = None
+    duration_threshold: Optional[int] = None
+    people_threshold: Optional[int] = None
+    confidence_threshold: Optional[float] = None
+    use_active_time: bool
+    active_start_time: Optional[str] = None
+    active_end_time: Optional[str] = None
+    created_at: str
+    updated_at: str

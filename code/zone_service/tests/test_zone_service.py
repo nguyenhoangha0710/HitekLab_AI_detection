@@ -10,6 +10,7 @@ from backend.app.config import ZoneServiceSettings
 from backend.app.database import Database
 from backend.app.repositories.camera_repository import CameraRepository
 from backend.app.repositories.reference_frame_repository import ReferenceFrameRepository
+from backend.app.repositories.rule_config_repository import RuleConfigRepository
 from backend.app.repositories.zone_repository import ZoneRepository
 from backend.app.routers.cameras import create_camera_router
 from backend.app.routers.zones import create_zone_router
@@ -58,11 +59,13 @@ class ZoneServiceTests(unittest.TestCase):
             created = repository.create("camera-1", payload)
             updated = repository.update(created["id"], {"name": "Updated Door Area"})
             zones = repository.list_by_camera("camera-1")
+            rules = RuleConfigRepository(connection).list_by_zone(created["id"])
             deleted = repository.delete(created["id"])
 
         self.assertEqual("Door Area", created["name"])
         self.assertEqual("Updated Door Area", updated["name"])
         self.assertEqual(1, len(zones))
+        self.assertEqual({"person_intrusion", "vehicle_intrusion"}, {rule["rule_type"] for rule in rules})
         self.assertTrue(deleted)
 
     def test_reference_frame_metadata(self):
@@ -98,7 +101,9 @@ class ZoneServiceTests(unittest.TestCase):
         self.assertIn("/api/cameras/{camera_id}/reference-frame", paths)
         self.assertIn("/api/cameras/{camera_id}/detections/stream", paths)
         self.assertIn("/api/cameras/{camera_id}/zones", paths)
+        self.assertIn("/api/zones/{zone_id}/rules", paths)
         self.assertIn("/api/zones/{zone_id}", paths)
+        self.assertIn("/api/rules/{rule_id}", paths)
 
     def test_camera_response_uses_zone_service_urls(self):
         from backend.app.serializers import camera_out

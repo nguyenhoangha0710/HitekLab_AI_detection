@@ -4,6 +4,7 @@ const state = {
   referenceFrame: null,
   referenceImage: null,
   zones: [],
+  zoneRules: {},
   liveZones: {},
   liveDetections: {},
   liveEventSources: {},
@@ -143,6 +144,19 @@ async function loadZones() {
   if (!state.selectedCameraId) return;
   state.zones = await api(`/api/cameras/${encodeURIComponent(state.selectedCameraId)}/zones`);
   state.liveZones[state.selectedCameraId] = state.zones;
+  state.zoneRules = {};
+  const ruleEntries = await Promise.all(
+    state.zones.map(async (zone) => {
+      try {
+        return [zone.id, await api(`/api/zones/${encodeURIComponent(zone.id)}/rules`)];
+      } catch (error) {
+        return [zone.id, []];
+      }
+    })
+  );
+  ruleEntries.forEach(([zoneId, rules]) => {
+    state.zoneRules[zoneId] = rules;
+  });
   renderZoneList();
   draw();
   drawYoloOverlay(state.selectedCameraId);
@@ -315,11 +329,152 @@ function renderZoneList() {
     card.innerHTML = `
       <strong>${escapeHtml(zone.name)}</strong>
       <p>${escapeHtml(zone.zone_type)} | ${zone.polygon.points.length} points | ${zone.enabled ? "enabled" : "disabled"}</p>
-      <button data-delete="${zone.id}">Delete</button>
+      <div class="rule-list">
+        ${ruleSelectorTemplate(zone.id, state.zoneRules[zone.id] || [])}
+        <div class="rule-editor" data-rule-editor="${escapeHtml(zone.id)}"></div>
+      </div>
+      <button data-delete="${zone.id}">Delete Zone</button>
     `;
-    card.querySelector("button").addEventListener("click", () => deleteZone(zone.id));
+    card.querySelector("[data-delete]").addEventListener("click", () => deleteZone(zone.id));
+    const ruleSelect = card.querySelector("[data-rule-select]");
+    ruleSelect?.addEventListener("change", () => renderSelectedRuleEditor(zone.id, ruleSelect.value));
+    card.querySelector("[data-rule-editor]")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-save-rule]");
+      if (button) saveRule(button.dataset.saveRule);
+    });
     els.zoneList.appendChild(card);
   });
+}
+
+function ruleSelectorTemplate(zoneId, rules) {
+  if (!rules.length) {
+    return `<p>No rules configured.</p>`;
+  }
+  return `
+    <label class="rule-select-label">
+      Rule
+      <select data-rule-select="${escapeHtml(zoneId)}">
+        <option value="">Select rule to edit</option>
+        ${rules
+          .map(
+            (rule) =>
+              `<option value="${escapeHtml(rule.id)}">${escapeHtml(ruleLabel(rule.rule_type))} ${
+                rule.enabled ? "(active)" : "(off)"
+              }</option>`
+          )
+          .join("")}
+      </select>
+    </label>
+  `;
+}
+
+function renderSelectedRuleEditor(zoneId, ruleId) {
+  const editor = els.zoneList.querySelector(`[data-rule-editor="${CSS.escape(zoneId)}"]`);
+  if (!editor) return;
+  if (!ruleId) {
+    editor.innerHTML = "";
+    return;
+  }
+  const rule = (state.zoneRules[zoneId] || []).find((item) => item.id === ruleId);
+  editor.innerHTML = rule ? ruleTemplate(rule) : "";
+}
+
+function ruleTemplate(rule) {
+  return `
+    <section class="rule-card" data-rule="${escapeHtml(rule.id)}">
+      <div class="rule-head">
+        <strong>${escapeHtml(ruleLabel(rule.rule_type))}</strong>
+        <label class="rule-toggle">
+          <input type="checkbox" data-rule-input="enabled" ${rule.enabled ? "checked" : ""}>
+          Active
+        </label>
+      </div>
+      <div class="rule-grid">
+        <label>
+          Object
+          <select data-rule-input="object_type">
+            ${ruleObjectOption(rule.object_type, "person")}
+            ${ruleObjectOption(rule.object_type, "car")}
+          </select>
+        </label>
+        <label>
+          Duration
+          <input type="number" min="0" data-rule-input="duration_threshold" value="${nullableValue(rule.duration_threshold)}" placeholder="None">
+        </label>
+        <label>
+          People
+          <input type="number" min="0" data-rule-input="people_threshold" value="${nullableValue(rule.people_threshold)}" placeholder="None">
+        </label>
+        <label>
+          Conf
+          <input type="number" min="0" max="1" step="0.05" data-rule-input="confidence_threshold" value="${nullableValue(rule.confidence_threshold)}" placeholder="None">
+        </label>
+      </div>
+      <div class="rule-time">
+        <label class="rule-toggle">
+          <input type="checkbox" data-rule-input="use_active_time" ${rule.use_active_time ? "checked" : ""}>
+          Use active time
+        </label>
+        <input type="time" data-rule-input="active_start_time" value="${rule.active_start_time || ""}">
+        <span>to</span>
+        <input type="time" data-rule-input="active_end_time" value="${rule.active_end_time || ""}">
+      </div>
+      <button type="button" data-save-rule="${escapeHtml(rule.id)}">Save Rule</button>
+    </section>
+  `;
+}
+
+function ruleObjectOption(current, value) {
+  return `<option value="${value}" ${current === value ? "selected" : ""}>${value}</option>`;
+}
+
+function nullableValue(value) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function ruleLabel(ruleType) {
+  return String(ruleType || "")
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+async function saveRule(ruleId) {
+  const container = els.zoneList.querySelector(`[data-rule="${CSS.escape(ruleId)}"]`);
+  if (!container) return;
+  const payload = {
+    enabled: ruleInput(container, "enabled").checked,
+    object_type: emptyToNull(ruleInput(container, "object_type").value),
+    duration_threshold: numberOrNull(ruleInput(container, "duration_threshold").value),
+    people_threshold: numberOrNull(ruleInput(container, "people_threshold").value),
+    confidence_threshold: numberOrNull(ruleInput(container, "confidence_threshold").value),
+    use_active_time: ruleInput(container, "use_active_time").checked,
+    active_start_time: emptyToNull(ruleInput(container, "active_start_time").value),
+    active_end_time: emptyToNull(ruleInput(container, "active_end_time").value),
+  };
+
+  try {
+    await api(`/api/rules/${encodeURIComponent(ruleId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    await loadZones();
+    setStatus("Rule saved");
+  } catch (error) {
+    setStatus(`Save rule failed: ${error.message}`);
+  }
+}
+
+function ruleInput(container, field) {
+  return container.querySelector(`[data-rule-input="${field}"]`);
+}
+
+function emptyToNull(value) {
+  return value === "" ? null : value;
+}
+
+function numberOrNull(value) {
+  return value === "" ? null : Number(value);
 }
 
 function canvasPointFromEvent(event) {

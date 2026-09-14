@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from .models import CameraOut, ReferenceFrameOut, ZoneOut
+from .models import CameraOut, ReferenceFrameOut, RuleConfigOut, ZoneOut
 
 
 def camera_out(row, edge_gateway_base_url: str) -> CameraOut:
@@ -51,6 +51,24 @@ def zone_out(row) -> ZoneOut:
     )
 
 
+def rule_config_out(row) -> RuleConfigOut:
+    return RuleConfigOut(
+        id=str(row["id"]),
+        zone_id=str(row["zone_id"]),
+        rule_type=row["rule_type"],
+        enabled=bool(row["enabled"]),
+        object_type=row["object_type"],
+        duration_threshold=row["duration_threshold"],
+        people_threshold=row["people_threshold"],
+        confidence_threshold=row["confidence_threshold"],
+        use_active_time=bool(row["use_active_time"]),
+        active_start_time=_time_string(row["active_start_time"]),
+        active_end_time=_time_string(row["active_end_time"]),
+        created_at=_stringify(row["created_at"]),
+        updated_at=_stringify(row["updated_at"]),
+    )
+
+
 def reference_frame_path(reference_frame_dir: Path, storage_key: Optional[str]) -> Optional[Path]:
     if not storage_key:
         return None
@@ -71,3 +89,12 @@ def _stringify(value) -> str:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
+
+
+def _time_string(value) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "strftime"):
+        return value.strftime("%H:%M")
+    text = str(value)
+    return text[:5] if len(text) >= 5 else text
