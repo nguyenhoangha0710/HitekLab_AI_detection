@@ -8,11 +8,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.app.config import ZoneServiceSettings
 from backend.app.database import Database
+from backend.app.repositories.ai_event_repository import AiEventRepository
 from backend.app.repositories.camera_repository import CameraRepository
 from backend.app.repositories.reference_frame_repository import ReferenceFrameRepository
 from backend.app.repositories.rule_config_repository import RuleConfigRepository
 from backend.app.repositories.zone_repository import ZoneRepository
 from backend.app.routers.cameras import create_camera_router
+from backend.app.routers.ai_events import create_ai_event_router
 from backend.app.routers.zones import create_zone_router
 
 
@@ -86,13 +88,15 @@ class ZoneServiceTests(unittest.TestCase):
         settings = ZoneServiceSettings(
             database_path=self.root / "zone.db",
             reference_frame_dir=self.root / "reference_frames",
+            evidence_dir=self.root / "evidence",
             camera_config_path=self.root / "missing.yaml",
             edge_gateway_base_url="http://localhost:8002",
             tenant_id="tenant-1",
         )
         camera_router = create_camera_router(self.database, settings)
+        ai_event_router = create_ai_event_router(self.database, settings)
         zone_router = create_zone_router(self.database)
-        paths = {route.path for route in camera_router.routes + zone_router.routes}
+        paths = {route.path for route in camera_router.routes + zone_router.routes + ai_event_router.routes}
 
         self.assertIn("/api/cameras", paths)
         self.assertIn("/api/cameras/{camera_id}/mjpeg", paths)
@@ -104,6 +108,8 @@ class ZoneServiceTests(unittest.TestCase):
         self.assertIn("/api/zones/{zone_id}/rules", paths)
         self.assertIn("/api/zones/{zone_id}", paths)
         self.assertIn("/api/rules/{rule_id}", paths)
+        self.assertIn("/api/ai-events", paths)
+        self.assertIn("/api/evidence", paths)
 
     def test_camera_response_uses_zone_service_urls(self):
         from backend.app.serializers import camera_out
@@ -116,6 +122,93 @@ class ZoneServiceTests(unittest.TestCase):
         self.assertEqual("/api/cameras/camera-1/mjpeg", output.live_stream_url)
         self.assertEqual("/api/cameras/camera-1/latest.jpg", output.latest_frame_url)
         self.assertEqual("/api/cameras/camera-1/detections/stream", output.detection_stream_url)
+
+    def test_ai_event_upsert_deduplicates_by_source_event_id(self):
+        zone_payload = {
+            "name": "Standing Area",
+            "zone_type": "controlled_area",
+            "polygon": {"points": [{"x": 1, "y": 2}, {"x": 3, "y": 2}, {"x": 2, "y": 5}]},
+            "frame_width": 640,
+            "frame_height": 360,
+            "enabled": True,
+        }
+
+        with self.database.session() as connection:
+            zone = ZoneRepository(connection).create("camera-1", zone_payload)
+            rule = RuleConfigRepository(connection).list_by_zone(zone["id"])[0]
+            repository = AiEventRepository(connection)
+            created = repository.upsert(
+                {
+                    "source_event_id": "camera-1|zone-1|rule-1|person-1|10",
+                    "camera_id": "camera-1",
+                    "zone_id": zone["id"],
+                    "rule_config_id": rule["id"],
+                    "event_type": "loitering",
+                    "object_type": "person",
+                    "track_id": "person-1",
+                    "confidence": 0.9,
+                    "lifecycle_status": "active",
+                    "first_sequence_number": 10,
+                    "last_sequence_number": 10,
+                    "started_at": "2026-09-15T00:00:00Z",
+                    "last_seen_at": "2026-09-15T00:00:00Z",
+                    "payload": {"sequence_number": 10},
+                }
+            )
+            updated = repository.upsert(
+                {
+                    "source_event_id": "camera-1|zone-1|rule-1|person-1|10",
+                    "camera_id": "camera-1",
+                    "zone_id": zone["id"],
+                    "rule_config_id": rule["id"],
+                    "event_type": "loitering",
+                    "object_type": "person",
+                    "track_id": "person-1",
+                    "confidence": 0.8,
+                    "lifecycle_status": "active",
+                    "first_sequence_number": 10,
+                    "last_sequence_number": 20,
+                    "started_at": "2026-09-15T00:00:00Z",
+                    "last_seen_at": "2026-09-15T00:00:01Z",
+                    "payload": {"sequence_number": 20},
+                }
+            )
+            events = repository.list(camera_id="camera-1")
+
+        self.assertEqual(created["id"], updated["id"])
+        self.assertEqual(1, len(events))
+        self.assertEqual(20, updated["last_sequence_number"])
+
+    def test_rule_update_persists_duration_and_active_time(self):
+        zone_payload = {
+            "name": "Rule Edit Area",
+            "zone_type": "restricted_area",
+            "polygon": {"points": [{"x": 1, "y": 2}, {"x": 3, "y": 2}, {"x": 2, "y": 5}]},
+            "frame_width": 640,
+            "frame_height": 360,
+            "enabled": True,
+        }
+
+        with self.database.session() as connection:
+            zone = ZoneRepository(connection).create("camera-1", zone_payload)
+            repository = RuleConfigRepository(connection)
+            rule = repository.list_by_zone(zone["id"])[0]
+            updated = repository.update(
+                rule["id"],
+                {
+                    "duration_threshold": 33,
+                    "use_active_time": True,
+                    "active_start_time": "08:30",
+                    "active_end_time": "17:45",
+                },
+            )
+            reloaded = repository.get(rule["id"])
+
+        self.assertEqual(33, updated["duration_threshold"])
+        self.assertEqual(33, reloaded["duration_threshold"])
+        self.assertTrue(bool(reloaded["use_active_time"]))
+        self.assertEqual("08:30", reloaded["active_start_time"])
+        self.assertEqual("17:45", reloaded["active_end_time"])
 
     def test_main_app_registers_detect_page(self):
         from backend.app.main import create_app

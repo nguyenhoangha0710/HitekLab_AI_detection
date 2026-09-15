@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import load_settings, project_root
 from .database import Database
 from .repositories.camera_repository import CameraRepository
+from .routers.ai_events import create_ai_event_router
 from .routers.cameras import create_camera_router, create_reference_frame_router
 from .routers.zones import create_zone_router
 from .services.camera_catalog_service import CameraCatalogService
@@ -17,6 +18,7 @@ def create_app() -> FastAPI:
     database = Database(settings.database_path, settings.database_url)
     database.initialize()
     settings.reference_frame_dir.mkdir(parents=True, exist_ok=True)
+    settings.evidence_dir.mkdir(parents=True, exist_ok=True)
 
     with database.session() as connection:
         cameras = CameraCatalogService(settings.camera_config_path).load_cameras()
@@ -26,6 +28,7 @@ def create_app() -> FastAPI:
     app.include_router(create_camera_router(database, settings))
     app.include_router(create_reference_frame_router(database, settings))
     app.include_router(create_zone_router(database))
+    app.include_router(create_ai_event_router(database, settings))
 
     frontend_dir = project_root() / "code" / "zone_service" / "frontend"
     app.mount("/static", StaticFiles(directory=str(frontend_dir / "src")), name="static")

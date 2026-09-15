@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from .models import CameraOut, ReferenceFrameOut, RuleConfigOut, ZoneOut
+from .models import AiEventOut, CameraOut, EvidenceOut, ReferenceFrameOut, RuleConfigOut, ZoneOut
 
 
 def camera_out(row, edge_gateway_base_url: str) -> CameraOut:
@@ -69,11 +69,62 @@ def rule_config_out(row) -> RuleConfigOut:
     )
 
 
+def ai_event_out(row) -> AiEventOut:
+    return AiEventOut(
+        id=str(row["id"]),
+        source_event_id=row["source_event_id"],
+        camera_id=str(row["camera_id"]),
+        zone_id=_optional_string(row["zone_id"]),
+        rule_config_id=_optional_string(row["rule_config_id"]),
+        event_type=row["event_type"],
+        object_type=row["object_type"],
+        track_id=row["track_id"],
+        confidence=row["confidence"],
+        lifecycle_status=row["lifecycle_status"],
+        first_sequence_number=row["first_sequence_number"],
+        last_sequence_number=row["last_sequence_number"],
+        started_at=_stringify(row["started_at"]),
+        last_seen_at=_stringify(row["last_seen_at"]),
+        ended_at=_optional_time(row["ended_at"]),
+        payload=_json_value(row["payload"]),
+        created_at=_stringify(row["created_at"]),
+        updated_at=_stringify(row["updated_at"]),
+    )
+
+
+def evidence_out(row) -> EvidenceOut:
+    evidence_id = str(row["id"])
+    return EvidenceOut(
+        id=evidence_id,
+        ai_event_id=str(row["ai_event_id"]),
+        camera_id=str(row["camera_id"]),
+        evidence_type=row["evidence_type"],
+        storage_key=row["storage_key"],
+        mime_type=row["mime_type"],
+        file_size=row["file_size"],
+        frame_id=row["frame_id"],
+        sequence_number=row["sequence_number"],
+        captured_at=_stringify(row["captured_at"]),
+        created_at=_stringify(row["created_at"]),
+        media_url="/api/evidence/{}/media".format(evidence_id),
+    )
+
+
 def reference_frame_path(reference_frame_dir: Path, storage_key: Optional[str]) -> Optional[Path]:
     if not storage_key:
         return None
     path = (reference_frame_dir / storage_key).resolve()
     root = reference_frame_dir.resolve()
+    if root not in path.parents and path != root:
+        return None
+    return path
+
+
+def evidence_path(evidence_dir: Path, storage_key: Optional[str]) -> Optional[Path]:
+    if not storage_key:
+        return None
+    path = (evidence_dir / storage_key).resolve()
+    root = evidence_dir.resolve()
     if root not in path.parents and path != root:
         return None
     return path
@@ -98,3 +149,11 @@ def _time_string(value) -> Optional[str]:
         return value.strftime("%H:%M")
     text = str(value)
     return text[:5] if len(text) >= 5 else text
+
+
+def _optional_string(value) -> Optional[str]:
+    return None if value is None else str(value)
+
+
+def _optional_time(value) -> Optional[str]:
+    return None if value is None else _stringify(value)

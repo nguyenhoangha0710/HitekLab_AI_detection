@@ -1,0 +1,4 @@
+-- This migration used to reset every rule duration to 15 seconds.
+-- Zone Service executes PostgreSQL init SQL on every startup, so any unconditional
+-- UPDATE here would overwrite values changed by the user in the UI after restart.
+-- Keep this file as a no-op to avoid reusing the version number and preserve data.

@@ -83,10 +83,53 @@ CREATE TABLE IF NOT EXISTS rule_config (
     UNIQUE (zone_id, rule_type)
 );
 
+CREATE TABLE IF NOT EXISTS ai_event (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    source_event_id TEXT NOT NULL UNIQUE,
+    camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
+    zone_id TEXT REFERENCES zone(id) ON DELETE SET NULL,
+    rule_config_id TEXT REFERENCES rule_config(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    object_type TEXT,
+    track_id TEXT,
+    confidence REAL,
+    lifecycle_status TEXT NOT NULL DEFAULT 'active',
+    first_sequence_number INTEGER,
+    last_sequence_number INTEGER,
+    started_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    ended_at TEXT,
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evidence (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    ai_event_id TEXT NOT NULL REFERENCES ai_event(id) ON DELETE CASCADE,
+    camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
+    evidence_type TEXT NOT NULL,
+    storage_key TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    file_size INTEGER,
+    frame_id TEXT,
+    sequence_number INTEGER,
+    captured_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_location_tenant_id ON location(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_camera_location_id ON camera(location_id);
 CREATE INDEX IF NOT EXISTS idx_zone_camera_id ON zone(camera_id);
 CREATE INDEX IF NOT EXISTS idx_reference_frame_camera_id ON camera_reference_frame(camera_id);
+CREATE INDEX IF NOT EXISTS idx_ai_event_camera_id ON ai_event(camera_id);
+CREATE INDEX IF NOT EXISTS idx_ai_event_zone_id ON ai_event(zone_id);
+CREATE INDEX IF NOT EXISTS idx_ai_event_started_at ON ai_event(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_evidence_ai_event_id ON evidence(ai_event_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_camera_id ON evidence(camera_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_captured_at ON evidence(captured_at DESC);
 """
 
 
@@ -159,6 +202,8 @@ class Database:
         self._add_sqlite_column_if_missing(connection, "rule_config", "use_active_time", "INTEGER NOT NULL DEFAULT 0")
         self._add_sqlite_column_if_missing(connection, "rule_config", "active_start_time", "TEXT")
         self._add_sqlite_column_if_missing(connection, "rule_config", "active_end_time", "TEXT")
+        self._ensure_sqlite_ai_event_table(connection)
+        self._ensure_sqlite_evidence_table(connection)
         connection.execute(
             """
             UPDATE camera
@@ -196,6 +241,59 @@ class Database:
         columns = {row["name"] for row in cursor.fetchall()}
         if column not in columns:
             connection.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, column, definition))
+
+    def _ensure_sqlite_ai_event_table(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS ai_event (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+                source_event_id TEXT NOT NULL UNIQUE,
+                camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
+                zone_id TEXT REFERENCES zone(id) ON DELETE SET NULL,
+                rule_config_id TEXT REFERENCES rule_config(id) ON DELETE SET NULL,
+                event_type TEXT NOT NULL,
+                object_type TEXT,
+                track_id TEXT,
+                confidence REAL,
+                lifecycle_status TEXT NOT NULL DEFAULT 'active',
+                first_sequence_number INTEGER,
+                last_sequence_number INTEGER,
+                started_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                ended_at TEXT,
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_event_camera_id ON ai_event(camera_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_event_zone_id ON ai_event(zone_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_event_started_at ON ai_event(started_at DESC);
+            """
+        )
+
+    def _ensure_sqlite_evidence_table(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS evidence (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+                ai_event_id TEXT NOT NULL REFERENCES ai_event(id) ON DELETE CASCADE,
+                camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
+                evidence_type TEXT NOT NULL,
+                storage_key TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_size INTEGER,
+                frame_id TEXT,
+                sequence_number INTEGER,
+                captured_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_evidence_ai_event_id ON evidence(ai_event_id);
+            CREATE INDEX IF NOT EXISTS idx_evidence_camera_id ON evidence(camera_id);
+            CREATE INDEX IF NOT EXISTS idx_evidence_captured_at ON evidence(captured_at DESC);
+            """
+        )
 
 
 def _postgres_init_dir() -> Path:

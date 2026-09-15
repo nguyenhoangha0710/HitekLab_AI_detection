@@ -28,7 +28,7 @@ class RuleConfigRepository:
                 {
                     "rule_type": "person_intrusion",
                     "object_type": "person",
-                    "duration_threshold": 30,
+                    "duration_threshold": 15,
                     "people_threshold": None,
                     "confidence_threshold": 0.6,
                     "use_active_time": True,
@@ -38,7 +38,7 @@ class RuleConfigRepository:
                 {
                     "rule_type": "vehicle_intrusion",
                     "object_type": "car",
-                    "duration_threshold": 30,
+                    "duration_threshold": 15,
                     "people_threshold": None,
                     "confidence_threshold": 0.6,
                     "use_active_time": True,
@@ -51,7 +51,7 @@ class RuleConfigRepository:
                 {
                     "rule_type": "crowd_limit",
                     "object_type": "person",
-                    "duration_threshold": 30,
+                    "duration_threshold": 15,
                     "people_threshold": 5,
                     "confidence_threshold": 0.6,
                     "use_active_time": False,
@@ -61,7 +61,7 @@ class RuleConfigRepository:
                 {
                     "rule_type": "loitering",
                     "object_type": "person",
-                    "duration_threshold": 45,
+                    "duration_threshold": 15,
                     "people_threshold": None,
                     "confidence_threshold": 0.6,
                     "use_active_time": False,
@@ -71,7 +71,7 @@ class RuleConfigRepository:
                 {
                     "rule_type": "vehicle_stopping",
                     "object_type": "car",
-                    "duration_threshold": 45,
+                    "duration_threshold": 15,
                     "people_threshold": None,
                     "confidence_threshold": 0.6,
                     "use_active_time": False,

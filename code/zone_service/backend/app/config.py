@@ -12,6 +12,7 @@ def project_root() -> Path:
 class ZoneServiceSettings:
     database_path: Path
     reference_frame_dir: Path
+    evidence_dir: Path
     camera_config_path: Path
     edge_gateway_base_url: str
     tenant_id: str
@@ -24,12 +25,14 @@ def load_settings() -> ZoneServiceSettings:
     reference_frame_dir = Path(
         os.getenv("ZONE_REFERENCE_FRAME_DIR", root / "code" / "zone_service" / "data" / "reference_frames")
     )
+    evidence_dir = Path(os.getenv("ZONE_EVIDENCE_DIR", root / "code" / "zone_service" / "data" / "evidence"))
     camera_config_path = Path(
         os.getenv("ZONE_CAMERA_CONFIG_PATH", root / "code" / "ai_service" / "config.docker.yaml")
     )
     return ZoneServiceSettings(
         database_path=database_path,
         reference_frame_dir=reference_frame_dir,
+        evidence_dir=evidence_dir,
         camera_config_path=camera_config_path,
         edge_gateway_base_url=os.getenv("EDGE_GATEWAY_BASE_URL", "http://localhost:8002").rstrip("/"),
         tenant_id=os.getenv("TENANT_ID", "demo-tenant"),

@@ -135,6 +135,7 @@ services:
       ZONE_CAMERA_CONFIG_PATH: "/app/code/ai_service/config.docker.yaml"
       ZONE_DB_PATH: "/app/code/zone_service/data/zone_service.db"
       ZONE_REFERENCE_FRAME_DIR: "/app/code/zone_service/data/reference_frames"
+      ZONE_EVIDENCE_DIR: "/app/code/zone_service/data/evidence"
       TENANT_ID: ${TENANT_ID:-demo-tenant}
     volumes:
       - zone-service-data:/app/code/zone_service/data

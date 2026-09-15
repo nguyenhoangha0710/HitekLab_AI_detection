@@ -94,3 +94,69 @@ class RuleConfigOut(BaseModel):
     active_end_time: Optional[str] = None
     created_at: str
     updated_at: str
+
+
+class AiEventCreate(BaseModel):
+    source_event_id: str = Field(..., min_length=1, max_length=255)
+    camera_id: str
+    zone_id: Optional[str] = None
+    rule_config_id: Optional[str] = None
+    event_type: str = Field(..., min_length=1, max_length=100)
+    object_type: Optional[str] = Field(None, max_length=100)
+    track_id: Optional[str] = Field(None, max_length=100)
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+    lifecycle_status: str = Field("active", min_length=1, max_length=50)
+    first_sequence_number: Optional[int] = None
+    last_sequence_number: Optional[int] = None
+    started_at: str
+    last_seen_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AiEventOut(BaseModel):
+    id: str
+    source_event_id: str
+    camera_id: str
+    zone_id: Optional[str] = None
+    rule_config_id: Optional[str] = None
+    event_type: str
+    object_type: Optional[str] = None
+    track_id: Optional[str] = None
+    confidence: Optional[float] = None
+    lifecycle_status: str
+    first_sequence_number: Optional[int] = None
+    last_sequence_number: Optional[int] = None
+    started_at: str
+    last_seen_at: str
+    ended_at: Optional[str] = None
+    payload: Dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class EvidenceCreate(BaseModel):
+    ai_event_id: str
+    camera_id: str
+    evidence_type: str = Field("snapshot", min_length=1, max_length=50)
+    storage_key: str
+    mime_type: str = Field("image/jpeg", min_length=1, max_length=100)
+    file_size: Optional[int] = None
+    frame_id: Optional[str] = None
+    sequence_number: Optional[int] = None
+    captured_at: str
+
+
+class EvidenceOut(BaseModel):
+    id: str
+    ai_event_id: str
+    camera_id: str
+    evidence_type: str
+    storage_key: str
+    mime_type: str
+    file_size: Optional[int] = None
+    frame_id: Optional[str] = None
+    sequence_number: Optional[int] = None
+    captured_at: str
+    created_at: str
+    media_url: str

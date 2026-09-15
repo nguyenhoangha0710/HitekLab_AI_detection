@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 
+from local_ai.byte_tracker import MultiCameraByteTracker
 from local_ai.detector import COCO_CLASS_IDS, parse_coco_class_filter
 from modal_ai.time_utils import utc_iso
 
@@ -16,6 +17,12 @@ DEFAULT_CONFIDENCE = float(os.getenv("LOCAL_YOLO_CONFIDENCE", "0.35"))
 DEFAULT_IMAGE_SIZE = int(os.getenv("LOCAL_YOLO_IMAGE_SIZE", "640"))
 DEFAULT_CLASSES = os.getenv("LOCAL_YOLO_CLASSES", "person,car")
 DEFAULT_DEVICE = os.getenv("LOCAL_YOLO_DEVICE") or None
+DEFAULT_TRACK_IOU = float(os.getenv("LOCAL_TRACK_IOU", "0.3"))
+DEFAULT_TRACK_BUFFER_FRAMES = int(os.getenv("LOCAL_TRACK_BUFFER_FRAMES", "45"))
+DEFAULT_TRACK_HIGH_THRESH = float(os.getenv("LOCAL_TRACK_HIGH_THRESH", "0.5"))
+DEFAULT_TRACK_LOW_THRESH = float(os.getenv("LOCAL_TRACK_LOW_THRESH", "0.1"))
+DEFAULT_NEW_TRACK_THRESH = float(os.getenv("LOCAL_NEW_TRACK_THRESH", "0.5"))
+DEFAULT_TRACK_MATCH_THRESH = float(os.getenv("LOCAL_TRACK_MATCH_THRESH", "0.8"))
 
 
 class LocalYoloBboxDetector:
@@ -35,6 +42,15 @@ class LocalYoloBboxDetector:
         self.class_ids = class_ids or [COCO_CLASS_IDS["person"], COCO_CLASS_IDS["car"]]
         self.device = device
         self.model = YOLO(model_path)
+        self.tracker = MultiCameraByteTracker(
+            iou_threshold=DEFAULT_TRACK_IOU,
+            max_missing_frames=DEFAULT_TRACK_BUFFER_FRAMES,
+            track_high_thresh=DEFAULT_TRACK_HIGH_THRESH,
+            track_low_thresh=DEFAULT_TRACK_LOW_THRESH,
+            new_track_thresh=DEFAULT_NEW_TRACK_THRESH,
+            match_thresh=DEFAULT_TRACK_MATCH_THRESH,
+        )
+        self._tracker_lock = threading.Lock()
 
     def detect(self, payload: Dict) -> Dict:
         import cv2
@@ -79,13 +95,21 @@ class LocalYoloBboxDetector:
                     }
                 )
 
+        camera_id = str(payload.get("camera_id"))
+        sequence_number = int(payload.get("sequence_number", 0))
+        # ByteTrack state phai tach theo camera_id. Moi detection sau YOLO se
+        # duoc gan track_id de Rule Engine tinh thoi gian dung trong zone.
+        with self._tracker_lock:
+            detections = self.tracker.update(camera_id, detections, sequence_number)
+            tracking_method = self.tracker.method_for_camera(camera_id)
+
         inference_ms = round((time.monotonic() - started_at) * 1000.0, 2)
         return {
             "tenant_id": payload.get("tenant_id"),
-            "camera_id": payload.get("camera_id"),
+            "camera_id": camera_id,
             "location_id": payload.get("location_id"),
             "frame_id": payload.get("frame_id"),
-            "sequence_number": int(payload.get("sequence_number", 0)),
+            "sequence_number": sequence_number,
             "frame_width": int(payload.get("frame_width", frame.shape[1])),
             "frame_height": int(payload.get("frame_height", frame.shape[0])),
             "captured_at": payload.get("captured_at"),
@@ -99,6 +123,16 @@ class LocalYoloBboxDetector:
             "detections": detections,
             "detection_count": len(detections),
             "inference_ms": inference_ms,
+            "tracking": {
+                "enabled": True,
+                "method": tracking_method,
+                "iou_threshold": DEFAULT_TRACK_IOU,
+                "max_missing_frames": DEFAULT_TRACK_BUFFER_FRAMES,
+                "track_high_thresh": DEFAULT_TRACK_HIGH_THRESH,
+                "track_low_thresh": DEFAULT_TRACK_LOW_THRESH,
+                "new_track_thresh": DEFAULT_NEW_TRACK_THRESH,
+                "match_thresh": DEFAULT_TRACK_MATCH_THRESH,
+            },
         }
 
 
@@ -153,6 +187,16 @@ def health():
         "model": DEFAULT_MODEL,
         "classes": DEFAULT_CLASSES.split(","),
         "device": DEFAULT_DEVICE or "auto",
+        "tracking": {
+            "enabled": True,
+            "method": "ultralytics_bytetrack",
+            "iou_threshold": DEFAULT_TRACK_IOU,
+            "max_missing_frames": DEFAULT_TRACK_BUFFER_FRAMES,
+            "track_high_thresh": DEFAULT_TRACK_HIGH_THRESH,
+            "track_low_thresh": DEFAULT_TRACK_LOW_THRESH,
+            "new_track_thresh": DEFAULT_NEW_TRACK_THRESH,
+            "match_thresh": DEFAULT_TRACK_MATCH_THRESH,
+        },
         "timestamp": utc_iso(),
     }
 

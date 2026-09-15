@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
+    <div class="alert-banner" id="alertBanner" hidden></div>
     <div class="shell">
       <aside class="sidebar">
         <div class="brand">
@@ -22,6 +23,7 @@
             <button class="tab active" data-tab="live">Live Cameras</button>
             <button class="tab" data-tab="yolo">YOLO Detection</button>
             <button class="tab" data-tab="zone">Zone Editor</button>
+            <button class="tab" data-tab="evidence">Evidence</button>
           </div>
           <div class="status" id="statusText">Loading cameras...</div>
         </header>
@@ -80,10 +82,23 @@
               </aside>
             </div>
           </section>
+
+          <section class="panel" id="evidencePanel">
+            <div class="evidence-head">
+              <label>
+                Camera
+                <select id="evidenceCameraFilter">
+                  <option value="">All cameras</option>
+                </select>
+              </label>
+              <button class="primary" id="refreshEvidenceButton">Refresh</button>
+            </div>
+            <div class="evidence-grid" id="evidenceGrid"></div>
+          </section>
         </main>
       </section>
     </div>
 
-    <script src="/static/app.js?v=compact-rule-config-v1"></script>
+    <script src="/static/app.js?v=evidence-snapshot-v1"></script>
   </body>
 </html>

@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r /tmp/zone-requirements.txt
 
 COPY code/zone_service ./code/zone_service
 COPY code/ai_service/config.docker.yaml ./code/ai_service/config.docker.yaml
+COPY code/database ./code/database
 
 EXPOSE 8010
 

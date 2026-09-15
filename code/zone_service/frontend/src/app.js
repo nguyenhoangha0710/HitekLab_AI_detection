@@ -6,22 +6,39 @@ const state = {
   zones: [],
   zoneRules: {},
   liveZones: {},
+  liveZoneRules: {},
   liveDetections: {},
   liveEventSources: {},
   yoloRenderedFrameIds: {},
+  ruleTrackStates: {},
+  crowdRuleStates: {},
+  violationStates: {},
+  aiEvents: [],
+  evidence: [],
+  activeAlerts: [],
   draftPoints: [],
   draggingPointIndex: null,
 };
+
+const RULE_REATTACH_GRACE_MS = 3000;
+const RULE_STATE_EXPIRE_MS = 5000;
+const RULE_REATTACH_DISTANCE_PX = 80;
+const RULE_REATTACH_MIN_AREA_RATIO = 0.5;
+const RULE_REATTACH_MAX_AREA_RATIO = 2.0;
 
 const els = {
   cameraList: document.getElementById("cameraList"),
   cameraGrid: document.getElementById("cameraGrid"),
   yoloGrid: document.getElementById("yoloGrid"),
   statusText: document.getElementById("statusText"),
+  alertBanner: document.getElementById("alertBanner"),
   selectedCameraName: document.getElementById("selectedCameraName"),
   selectedCameraMeta: document.getElementById("selectedCameraMeta"),
   captureButton: document.getElementById("captureButton"),
   zoneCanvas: document.getElementById("zoneCanvas"),
+  evidenceCameraFilter: document.getElementById("evidenceCameraFilter"),
+  evidenceGrid: document.getElementById("evidenceGrid"),
+  refreshEvidenceButton: document.getElementById("refreshEvidenceButton"),
   emptyState: document.getElementById("emptyState"),
   zoneName: document.getElementById("zoneName"),
   zoneType: document.getElementById("zoneType"),
@@ -49,11 +66,25 @@ async function loadCameras() {
   state.cameras = await api("/api/cameras");
   els.statusText.textContent = `${state.cameras.length} cameras loaded`;
   renderCameraList();
+  renderEvidenceCameraFilter();
   renderLiveGrid();
   renderYoloGrid();
   if (state.cameras.length && !state.selectedCameraId) {
     await selectCamera(state.cameras[0].id);
   }
+}
+
+function renderEvidenceCameraFilter() {
+  if (!els.evidenceCameraFilter) return;
+  const currentValue = els.evidenceCameraFilter.value;
+  els.evidenceCameraFilter.innerHTML = `<option value="">All cameras</option>`;
+  state.cameras.forEach((camera) => {
+    const option = document.createElement("option");
+    option.value = camera.id;
+    option.textContent = camera.name;
+    els.evidenceCameraFilter.appendChild(option);
+  });
+  els.evidenceCameraFilter.value = currentValue;
 }
 
 function cameraById(cameraId) {
@@ -252,10 +283,25 @@ async function deleteZone(zoneId) {
 
 async function loadLiveZones(cameraId) {
   try {
-    state.liveZones[cameraId] = await api(`/api/cameras/${encodeURIComponent(cameraId)}/zones`);
+    const zones = await api(`/api/cameras/${encodeURIComponent(cameraId)}/zones`);
+    state.liveZones[cameraId] = zones;
+    state.liveZoneRules[cameraId] = {};
+    const ruleEntries = await Promise.all(
+      zones.map(async (zone) => {
+        try {
+          return [zone.id, await api(`/api/zones/${encodeURIComponent(zone.id)}/rules`)];
+        } catch (error) {
+          return [zone.id, []];
+        }
+      })
+    );
+    ruleEntries.forEach(([zoneId, rules]) => {
+      state.liveZoneRules[cameraId][zoneId] = rules;
+    });
     drawYoloOverlay(cameraId);
   } catch (error) {
     state.liveZones[cameraId] = [];
+    state.liveZoneRules[cameraId] = {};
   }
 }
 
@@ -268,6 +314,7 @@ function connectLiveDetections(camera) {
   events.onmessage = (event) => {
     const result = JSON.parse(event.data);
     state.liveDetections[camera.id] = result;
+    evaluateRules(camera.id, result);
     updateLiveMeta(camera.id, result);
     renderSyncedYoloFrame(camera.id, result);
   };
@@ -284,7 +331,8 @@ function updateLiveMeta(cameraId, result) {
   if (!meta || !result) return;
   const detections = result.detection_count ?? (result.detections || []).length;
   const inference = result.inference_ms !== undefined ? ` | ai ${result.inference_ms}ms` : "";
-  meta.textContent = `${cameraId} | bbox seq ${result.sequence_number} | detections ${detections}${inference}`;
+  const tracking = result.tracking?.enabled ? " | tracking on" : "";
+  meta.textContent = `${cameraId} | bbox seq ${result.sequence_number} | detections ${detections}${inference}${tracking}`;
 }
 
 function renderSyncedYoloFrame(cameraId, result) {
@@ -580,6 +628,375 @@ function drawYoloOverlay(cameraId) {
   });
 }
 
+function evaluateRules(cameraId, result) {
+  if (!result || !Array.isArray(result.detections)) return;
+  const now = Date.now();
+  const zones = (state.liveZones[cameraId] || []).filter((zone) => zone.enabled !== false);
+  const ruleMap = state.liveZoneRules[cameraId] || {};
+  const seenTrackKeys = new Set();
+  const crowdCounts = {};
+  const alerts = [];
+
+  result.detections.forEach((detection, index) => {
+    const originalPoint = detectionBottomCenterOriginal(detection);
+    const matchedZones = zones.filter((zone) => pointInPolygon(originalPoint, zone.polygon.points || []));
+    matchedZones.forEach((zone) => {
+      const rules = ruleMap[zone.id] || [];
+      rules.forEach((rule) => {
+        if (!ruleAppliesNow(rule, detection)) return;
+        if (rule.rule_type === "crowd_limit") {
+          const key = `${cameraId}|${zone.id}|${rule.id}`;
+          crowdCounts[key] = crowdCounts[key] || { zone, rule, tracks: new Set() };
+          crowdCounts[key].tracks.add(trackKey(detection, result, index));
+          return;
+        }
+
+        const threshold = rule.duration_threshold;
+        if (threshold === null || threshold === undefined) return;
+        const currentTrackKey = trackKey(detection, result, index);
+        const key = `${cameraId}|${zone.id}|${rule.id}|${currentTrackKey}`;
+        seenTrackKeys.add(key);
+        const existing =
+          state.ruleTrackStates[key] ||
+          reattachRuleState(cameraId, zone, rule, detection, result, index, currentTrackKey, seenTrackKeys, now) ||
+          {
+            firstSeenAt: now,
+            cameraId,
+            zoneId: zone.id,
+            ruleId: rule.id,
+            zoneName: zone.name,
+            ruleType: rule.rule_type,
+            objectType: detection.class_name,
+            trackId: currentTrackKey,
+            reattached: false,
+            firstSequenceNumber: result.sequence_number,
+            startedAt: new Date(now).toISOString(),
+          };
+        existing.cameraId = cameraId;
+        existing.zoneId = zone.id;
+        existing.ruleId = rule.id;
+        existing.zoneName = zone.name;
+        existing.ruleType = rule.rule_type;
+        existing.objectType = detection.class_name;
+        existing.trackId = currentTrackKey;
+        existing.lastFootpoint = originalPoint;
+        existing.lastBbox = detection.bbox_xyxy || null;
+        existing.lastSeenAt = now;
+        existing.lastSequenceNumber = result.sequence_number;
+        state.ruleTrackStates[key] = existing;
+
+        const elapsedSeconds = (now - existing.firstSeenAt) / 1000;
+        if (elapsedSeconds >= Number(threshold)) {
+          publishRuleViolationEvent(existing, zone, rule, detection, result, now);
+          alerts.push({
+            key,
+            cameraId,
+            zoneName: zone.name,
+            ruleType: rule.rule_type,
+            objectType: detection.class_name,
+            trackId: existing.trackId,
+            elapsedSeconds,
+            sequenceNumber: result.sequence_number,
+          });
+        }
+      });
+    });
+  });
+
+  Object.values(crowdCounts).forEach(({ zone, rule, tracks }) => {
+    const peopleThreshold = rule.people_threshold;
+    const durationThreshold = rule.duration_threshold;
+    if (peopleThreshold === null || peopleThreshold === undefined) return;
+    if (durationThreshold === null || durationThreshold === undefined) return;
+
+    const key = `${cameraId}|${zone.id}|${rule.id}`;
+    if (tracks.size >= Number(peopleThreshold)) {
+      const existing = state.crowdRuleStates[key] || { firstSeenAt: now };
+      existing.lastSeenAt = now;
+      existing.count = tracks.size;
+      existing.cameraId = cameraId;
+      existing.zoneId = zone.id;
+      existing.ruleId = rule.id;
+      existing.zoneName = zone.name;
+      existing.ruleType = rule.rule_type;
+      existing.objectType = "person";
+      existing.trackId = `${tracks.size} objects`;
+      existing.firstSequenceNumber = existing.firstSequenceNumber ?? result.sequence_number;
+      existing.startedAt = existing.startedAt || new Date(now).toISOString();
+      state.crowdRuleStates[key] = existing;
+      const elapsedSeconds = (now - existing.firstSeenAt) / 1000;
+      if (elapsedSeconds >= Number(durationThreshold)) {
+        publishRuleViolationEvent(existing, zone, rule, null, result, now);
+        alerts.push({
+          key,
+          cameraId,
+          zoneName: zone.name,
+          ruleType: rule.rule_type,
+          objectType: "person",
+          trackId: `${tracks.size} objects`,
+          elapsedSeconds,
+          sequenceNumber: result.sequence_number,
+        });
+      }
+    } else {
+      delete state.crowdRuleStates[key];
+    }
+  });
+
+  expireRuleStates(cameraId, seenTrackKeys, now);
+  updateAlerts(alerts, now);
+}
+
+function publishRuleViolationEvent(ruleState, zone, rule, detection, result, now) {
+  if (ruleState.aiEventStatus === "pending" || ruleState.aiEventStatus === "created") return;
+
+  const sourceEventId = ruleState.sourceEventId || buildSourceEventId(ruleState, rule, result);
+  ruleState.sourceEventId = sourceEventId;
+  ruleState.aiEventStatus = "pending";
+
+  const payload = {
+    source_event_id: sourceEventId,
+    camera_id: ruleState.cameraId,
+    zone_id: zone.id,
+    rule_config_id: rule.id,
+    event_type: rule.rule_type,
+    object_type: ruleState.objectType || detection?.class_name || rule.object_type,
+    track_id: ruleState.trackId,
+    confidence: detection ? Number(detection.confidence || 0) : null,
+    lifecycle_status: "active",
+    first_sequence_number: ruleState.firstSequenceNumber,
+    last_sequence_number: result.sequence_number,
+    started_at: ruleState.startedAt || new Date(ruleState.firstSeenAt).toISOString(),
+    last_seen_at: new Date(now).toISOString(),
+    payload: {
+      camera_id: ruleState.cameraId,
+      frame_id: result.frame_id,
+      sequence_number: result.sequence_number,
+      zone_name: zone.name,
+      zone_type: zone.zone_type,
+      rule_type: rule.rule_type,
+      elapsed_seconds: Math.round((now - ruleState.firstSeenAt) / 1000),
+      detection: detection
+        ? {
+            class_name: detection.class_name,
+            confidence: detection.confidence,
+            bbox_xyxy: detection.bbox_xyxy,
+            track_id: detection.track_id,
+          }
+        : null,
+    },
+  };
+
+  api("/api/ai-events", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+    .then((event) => {
+      ruleState.aiEventId = event.id;
+      ruleState.aiEventStatus = "created";
+      if (document.getElementById("evidencePanel")?.classList.contains("active")) {
+        loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
+      }
+    })
+    .catch((error) => {
+      ruleState.aiEventStatus = "failed";
+      ruleState.aiEventError = error.message;
+      setStatus(`AI event save failed: ${error.message}`);
+    });
+}
+
+async function loadEvidence() {
+  if (!els.evidenceGrid) return;
+  const cameraId = els.evidenceCameraFilter?.value || "";
+  const query = cameraId ? `?camera_id=${encodeURIComponent(cameraId)}&limit=100` : "?limit=100";
+  const [events, evidence] = await Promise.all([api(`/api/ai-events${query}`), api(`/api/evidence${query}`)]);
+  state.aiEvents = events;
+  state.evidence = evidence;
+  renderEvidence();
+}
+
+function renderEvidence() {
+  if (!els.evidenceGrid) return;
+  const eventById = new Map(state.aiEvents.map((event) => [event.id, event]));
+  if (!state.evidence.length) {
+    els.evidenceGrid.innerHTML = `<div class="zone-card"><p>No evidence snapshots yet.</p></div>`;
+    return;
+  }
+
+  els.evidenceGrid.innerHTML = state.evidence
+    .map((item) => {
+      const event = eventById.get(item.ai_event_id);
+      const camera = cameraById(item.camera_id);
+      const eventType = event ? ruleLabel(event.event_type) : "AI Event";
+      const objectLabel = event?.object_type ? `${event.object_type} ${event.track_id || ""}`.trim() : "object";
+      const sequence = item.sequence_number !== null && item.sequence_number !== undefined ? item.sequence_number : "-";
+      return `
+        <article class="evidence-card">
+          <header>
+            <h2>${escapeHtml(camera?.name || item.camera_id)}</h2>
+            <p>${escapeHtml(eventType)} | ${escapeHtml(objectLabel)} | seq ${escapeHtml(sequence)}</p>
+          </header>
+          <img src="${escapeHtml(item.media_url)}?t=${Date.now()}" alt="${escapeHtml(eventType)} evidence">
+          <div class="evidence-meta">
+            <span>Captured: ${escapeHtml(item.captured_at)}</span>
+            <span>Evidence: ${escapeHtml(item.evidence_type)} | ${escapeHtml(item.mime_type)}</span>
+            <span>Event: ${escapeHtml(item.ai_event_id)}</span>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function buildSourceEventId(ruleState, rule, result) {
+  const firstSequence = ruleState.firstSequenceNumber ?? result.sequence_number ?? "unknown";
+  return [ruleState.cameraId, ruleState.zoneId, rule.id, ruleState.trackId, firstSequence].join("|");
+}
+
+function detectionBottomCenterOriginal(detection) {
+  const box = detection.bbox_xyxy || [0, 0, 0, 0];
+  return {
+    x: (Number(box[0] || 0) + Number(box[2] || 0)) / 2,
+    y: Number(box[3] || 0),
+  };
+}
+
+function trackKey(detection, result, index) {
+  if (detection.track_id !== undefined && detection.track_id !== null) {
+    return `${detection.class_name || "object"}-${detection.track_id}`;
+  }
+  return `${detection.class_name || "object"}-${result.sequence_number}-${index}`;
+}
+
+function reattachRuleState(cameraId, zone, rule, detection, result, index, currentTrackKey, seenTrackKeys, now) {
+  const footpoint = detectionBottomCenterOriginal(detection);
+  const bbox = detection.bbox_xyxy || null;
+  let bestKey = null;
+  let bestState = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  Object.entries(state.ruleTrackStates).forEach(([key, candidate]) => {
+    if (seenTrackKeys.has(key)) return;
+    if (candidate.cameraId !== cameraId) return;
+    if (candidate.zoneId !== zone.id) return;
+    if (candidate.ruleId !== rule.id) return;
+    if (candidate.objectType !== detection.class_name) return;
+    if (candidate.trackId === currentTrackKey) return;
+    if (!candidate.lastSeenAt || now - candidate.lastSeenAt > RULE_REATTACH_GRACE_MS) return;
+    if (!candidate.lastFootpoint || !candidate.lastBbox || !bbox) return;
+    if (!isAreaRatioCompatible(candidate.lastBbox, bbox)) return;
+
+    const distance = pointDistance(candidate.lastFootpoint, footpoint);
+    if (distance <= RULE_REATTACH_DISTANCE_PX && distance < bestDistance) {
+      bestKey = key;
+      bestState = candidate;
+      bestDistance = distance;
+    }
+  });
+
+  if (!bestState || !bestKey) return null;
+  delete state.ruleTrackStates[bestKey];
+  bestState.reattached = true;
+  bestState.reattachedFrom = bestState.trackId;
+  bestState.reattachedTo = currentTrackKey;
+  bestState.reattachedAtSequenceNumber = result.sequence_number;
+  return bestState;
+}
+
+function pointDistance(a, b) {
+  const dx = Number(a.x || 0) - Number(b.x || 0);
+  const dy = Number(a.y || 0) - Number(b.y || 0);
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function isAreaRatioCompatible(previousBbox, currentBbox) {
+  const previousArea = bboxArea(previousBbox);
+  const currentArea = bboxArea(currentBbox);
+  if (previousArea <= 0 || currentArea <= 0) return false;
+  const ratio = currentArea / previousArea;
+  return ratio >= RULE_REATTACH_MIN_AREA_RATIO && ratio <= RULE_REATTACH_MAX_AREA_RATIO;
+}
+
+function bboxArea(bbox) {
+  return Math.max(0, Number(bbox[2] || 0) - Number(bbox[0] || 0)) * Math.max(0, Number(bbox[3] || 0) - Number(bbox[1] || 0));
+}
+
+function ruleAppliesNow(rule, detection) {
+  if (!rule || rule.enabled === false) return false;
+  if (rule.object_type && detection.class_name !== rule.object_type) return false;
+  if (rule.confidence_threshold !== null && rule.confidence_threshold !== undefined) {
+    if (Number(detection.confidence || 0) < Number(rule.confidence_threshold)) return false;
+  }
+  if (rule.use_active_time && !isInActiveWindow(rule.active_start_time, rule.active_end_time)) return false;
+  return true;
+}
+
+function isInActiveWindow(start, end) {
+  if (!start || !end) return false;
+  const now = new Date();
+  const current = now.getHours() * 60 + now.getMinutes();
+  const startMinutes = timeToMinutes(start);
+  const endMinutes = timeToMinutes(end);
+  if (startMinutes === endMinutes) return true;
+  if (startMinutes < endMinutes) return current >= startMinutes && current <= endMinutes;
+  return current >= startMinutes || current <= endMinutes;
+}
+
+function timeToMinutes(value) {
+  const [hour, minute] = String(value).split(":").map((part) => Number(part));
+  return hour * 60 + minute;
+}
+
+function expireRuleStates(cameraId, seenTrackKeys, now) {
+  Object.entries(state.ruleTrackStates).forEach(([key, value]) => {
+    if (value.cameraId !== cameraId) return;
+    if (seenTrackKeys.has(key)) return;
+    if (now - value.lastSeenAt > RULE_STATE_EXPIRE_MS) {
+      delete state.ruleTrackStates[key];
+    }
+  });
+  Object.entries(state.crowdRuleStates).forEach(([key, value]) => {
+    if (!key.startsWith(`${cameraId}|`)) return;
+    if (now - value.lastSeenAt > RULE_STATE_EXPIRE_MS) {
+      delete state.crowdRuleStates[key];
+    }
+  });
+}
+
+function updateAlerts(alerts, now) {
+  const alertMap = new Map(state.activeAlerts.map((alert) => [alert.key, alert]));
+  alerts.forEach((alert) => {
+    alert.lastSeenAt = now;
+    alertMap.set(alert.key, alert);
+  });
+  state.activeAlerts = Array.from(alertMap.values()).filter((alert) => now - alert.lastSeenAt <= 4000);
+  renderAlertBanner();
+}
+
+function renderAlertBanner() {
+  if (!els.alertBanner) return;
+  if (!state.activeAlerts.length) {
+    els.alertBanner.hidden = true;
+    els.alertBanner.innerHTML = "";
+    return;
+  }
+  const latest = state.activeAlerts.slice(-3).reverse();
+  els.alertBanner.hidden = false;
+  els.alertBanner.innerHTML = latest
+    .map(
+      (alert) => {
+        const camera = cameraById(alert.cameraId);
+        const cameraName = camera ? camera.name : alert.cameraId;
+        return `<div><strong>${escapeHtml(cameraName)}</strong> | ${escapeHtml(
+          ruleLabel(alert.ruleType)
+        )} | ${escapeHtml(alert.objectType)} ${escapeHtml(alert.trackId)} in ${escapeHtml(
+          alert.zoneName
+        )} - ${Math.round(alert.elapsedSeconds)}s</div>`;
+      }
+    )
+    .join("");
+}
+
 function detectionBottomCenter(detection, frameWidth, frameHeight, viewport) {
   const box = detection.bbox_xyxy || [0, 0, 0, 0];
   return scalePoint(
@@ -675,7 +1092,8 @@ function drawDetection(ctx, detection, frameWidth, frameHeight, viewport, match 
   const p1 = scalePoint({ x: box[0], y: box[1] }, frameWidth, frameHeight, viewport);
   const p2 = scalePoint({ x: box[2], y: box[3] }, frameWidth, frameHeight, viewport);
   const color = detection.class_name === "car" ? "#38bdf8" : "#39ff14";
-  const label = `${detection.class_name} ${Number(detection.confidence || 0).toFixed(2)}`;
+  const track = detection.track_id !== undefined && detection.track_id !== null ? ` #${detection.track_id}` : "";
+  const label = `${detection.class_name}${track} ${Number(detection.confidence || 0).toFixed(2)}`;
   const matched = Boolean(match.matchedZones && match.matchedZones.length);
   const matchLabel = matchedZoneLabel(match.matchedZones || []);
 
@@ -779,6 +1197,9 @@ function activateTab(tabName) {
   if (!tab || !panel) return;
   tab.classList.add("active");
   panel.classList.add("active");
+  if (tabName === "evidence") {
+    loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
+  }
 }
 
 function initialTabFromPath() {
@@ -791,6 +1212,12 @@ window.addEventListener("resize", () => {
 });
 
 els.captureButton.addEventListener("click", captureReferenceFrame);
+els.refreshEvidenceButton?.addEventListener("click", () => {
+  loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
+});
+els.evidenceCameraFilter?.addEventListener("change", () => {
+  loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
+});
 els.saveZoneButton.addEventListener("click", saveZone);
 els.clearButton.addEventListener("click", clearDraft);
 els.undoButton.addEventListener("click", undoPoint);
