@@ -24,7 +24,7 @@ body {
 
 .alert-banner {
   position: fixed;
-  top: 10px;
+  bottom: 14px;
   left: 50%;
   z-index: 20;
   transform: translateX(-50%);
@@ -38,6 +38,7 @@ body {
   border-radius: 6px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
   font-size: 12px;
+  pointer-events: none;
 }
 
 .alert-banner[hidden] {

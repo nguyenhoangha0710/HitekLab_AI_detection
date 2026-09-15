@@ -14,6 +14,7 @@ const state = {
   crowdRuleStates: {},
   violationStates: {},
   aiEvents: [],
+  alerts: [],
   evidence: [],
   activeAlerts: [],
   draftPoints: [],
@@ -809,8 +810,13 @@ async function loadEvidence() {
   if (!els.evidenceGrid) return;
   const cameraId = els.evidenceCameraFilter?.value || "";
   const query = cameraId ? `?camera_id=${encodeURIComponent(cameraId)}&limit=100` : "?limit=100";
-  const [events, evidence] = await Promise.all([api(`/api/ai-events${query}`), api(`/api/evidence${query}`)]);
+  const [events, alerts, evidence] = await Promise.all([
+    api(`/api/ai-events${query}`),
+    api(`/api/alerts${query}`),
+    api(`/api/evidence${query}`),
+  ]);
   state.aiEvents = events;
+  state.alerts = alerts;
   state.evidence = evidence;
   renderEvidence();
 }
@@ -818,6 +824,7 @@ async function loadEvidence() {
 function renderEvidence() {
   if (!els.evidenceGrid) return;
   const eventById = new Map(state.aiEvents.map((event) => [event.id, event]));
+  const alertById = new Map(state.alerts.map((alert) => [alert.id, alert]));
   if (!state.evidence.length) {
     els.evidenceGrid.innerHTML = `<div class="zone-card"><p>No evidence snapshots yet.</p></div>`;
     return;
@@ -826,20 +833,24 @@ function renderEvidence() {
   els.evidenceGrid.innerHTML = state.evidence
     .map((item) => {
       const event = eventById.get(item.ai_event_id);
+      const alert = item.alert_id ? alertById.get(item.alert_id) : null;
       const camera = cameraById(item.camera_id);
-      const eventType = event ? ruleLabel(event.event_type) : "AI Event";
-      const objectLabel = event?.object_type ? `${event.object_type} ${event.track_id || ""}`.trim() : "object";
+      const eventType = alert ? ruleLabel(alert.rule_type) : event ? ruleLabel(event.event_type) : "AI Event";
+      const objectType = alert?.object_type || event?.object_type;
+      const objectLabel = objectType ? `${objectType} ${event?.track_id || ""}`.trim() : "object";
       const sequence = item.sequence_number !== null && item.sequence_number !== undefined ? item.sequence_number : "-";
+      const sourceCount = alert ? ` | sources ${alert.active_source_count}` : "";
       return `
         <article class="evidence-card">
           <header>
             <h2>${escapeHtml(camera?.name || item.camera_id)}</h2>
-            <p>${escapeHtml(eventType)} | ${escapeHtml(objectLabel)} | seq ${escapeHtml(sequence)}</p>
+            <p>${escapeHtml(eventType)} | ${escapeHtml(objectLabel)} | seq ${escapeHtml(sequence)}${escapeHtml(sourceCount)}</p>
           </header>
           <img src="${escapeHtml(item.media_url)}?t=${Date.now()}" alt="${escapeHtml(eventType)} evidence">
           <div class="evidence-meta">
             <span>Captured: ${escapeHtml(item.captured_at)}</span>
             <span>Evidence: ${escapeHtml(item.evidence_type)} | ${escapeHtml(item.mime_type)}</span>
+            <span>Alert: ${escapeHtml(item.alert_id || "-")}</span>
             <span>Event: ${escapeHtml(item.ai_event_id)}</span>
           </div>
         </article>

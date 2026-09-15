@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backend.app.config import ZoneServiceSettings
 from backend.app.database import Database
 from backend.app.repositories.ai_event_repository import AiEventRepository
+from backend.app.repositories.alert_repository import AlertRepository
 from backend.app.repositories.camera_repository import CameraRepository
 from backend.app.repositories.reference_frame_repository import ReferenceFrameRepository
 from backend.app.repositories.rule_config_repository import RuleConfigRepository
@@ -109,6 +110,7 @@ class ZoneServiceTests(unittest.TestCase):
         self.assertIn("/api/zones/{zone_id}", paths)
         self.assertIn("/api/rules/{rule_id}", paths)
         self.assertIn("/api/ai-events", paths)
+        self.assertIn("/api/alerts", paths)
         self.assertIn("/api/evidence", paths)
 
     def test_camera_response_uses_zone_service_urls(self):
@@ -178,6 +180,59 @@ class ZoneServiceTests(unittest.TestCase):
         self.assertEqual(created["id"], updated["id"])
         self.assertEqual(1, len(events))
         self.assertEqual(20, updated["last_sequence_number"])
+
+    def test_alert_deduplicates_same_rule_context(self):
+        zone_payload = {
+            "name": "Dedup Area",
+            "zone_type": "controlled_area",
+            "polygon": {"points": [{"x": 1, "y": 2}, {"x": 3, "y": 2}, {"x": 2, "y": 5}]},
+            "frame_width": 640,
+            "frame_height": 360,
+            "enabled": True,
+        }
+
+        with self.database.session() as connection:
+            zone = ZoneRepository(connection).create("camera-1", zone_payload)
+            rule = RuleConfigRepository(connection).list_by_zone(zone["id"])[0]
+            repository = AlertRepository(connection)
+            first = repository.upsert_for_violation(
+                {
+                    "source_event_id": "event-1",
+                    "camera_id": "camera-1",
+                    "zone_id": zone["id"],
+                    "rule_config_id": rule["id"],
+                    "event_type": "loitering",
+                    "object_type": "person",
+                    "track_id": "person-1",
+                    "first_sequence_number": 10,
+                    "last_sequence_number": 10,
+                    "started_at": "2026-09-15T00:00:00Z",
+                    "last_seen_at": "2026-09-15T00:00:00Z",
+                    "payload": {"zone_name": "Dedup Area", "frame_id": "frame-10"},
+                }
+            )
+            second = repository.upsert_for_violation(
+                {
+                    "source_event_id": "event-2",
+                    "camera_id": "camera-1",
+                    "zone_id": zone["id"],
+                    "rule_config_id": rule["id"],
+                    "event_type": "loitering",
+                    "object_type": "person",
+                    "track_id": "person-9",
+                    "first_sequence_number": 11,
+                    "last_sequence_number": 20,
+                    "started_at": "2026-09-15T00:00:10Z",
+                    "last_seen_at": "2026-09-15T00:00:10Z",
+                    "payload": {"zone_name": "Dedup Area", "frame_id": "frame-20"},
+                }
+            )
+            alerts = repository.list(camera_id="camera-1")
+
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(1, len(alerts))
+        self.assertEqual(2, second["active_source_count"])
+        self.assertEqual(20, second["last_sequence_number"])
 
     def test_rule_update_persists_duration_and_active_time(self):
         zone_payload = {

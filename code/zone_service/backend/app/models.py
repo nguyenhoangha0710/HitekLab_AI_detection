@@ -116,6 +116,7 @@ class AiEventCreate(BaseModel):
 
 class AiEventOut(BaseModel):
     id: str
+    alert_id: Optional[str] = None
     source_event_id: str
     camera_id: str
     zone_id: Optional[str] = None
@@ -136,6 +137,7 @@ class AiEventOut(BaseModel):
 
 
 class EvidenceCreate(BaseModel):
+    alert_id: Optional[str] = None
     ai_event_id: str
     camera_id: str
     evidence_type: str = Field("snapshot", min_length=1, max_length=50)
@@ -149,6 +151,7 @@ class EvidenceCreate(BaseModel):
 
 class EvidenceOut(BaseModel):
     id: str
+    alert_id: Optional[str] = None
     ai_event_id: str
     camera_id: str
     evidence_type: str
@@ -160,3 +163,24 @@ class EvidenceOut(BaseModel):
     captured_at: str
     created_at: str
     media_url: str
+
+
+class AlertOut(BaseModel):
+    id: str
+    dedup_key: str
+    camera_id: str
+    zone_id: Optional[str] = None
+    rule_config_id: Optional[str] = None
+    rule_type: str
+    object_type: Optional[str] = None
+    risk_level: str
+    lifecycle_status: str
+    active_source_count: int
+    first_sequence_number: Optional[int] = None
+    last_sequence_number: Optional[int] = None
+    started_at: str
+    last_seen_at: str
+    ended_at: Optional[str] = None
+    payload: Dict[str, Any]
+    created_at: str
+    updated_at: str

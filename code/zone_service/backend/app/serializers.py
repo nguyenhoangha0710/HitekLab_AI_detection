@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from .models import AiEventOut, CameraOut, EvidenceOut, ReferenceFrameOut, RuleConfigOut, ZoneOut
+from .models import AiEventOut, AlertOut, CameraOut, EvidenceOut, ReferenceFrameOut, RuleConfigOut, ZoneOut
 
 
 def camera_out(row, edge_gateway_base_url: str) -> CameraOut:
@@ -72,6 +72,7 @@ def rule_config_out(row) -> RuleConfigOut:
 def ai_event_out(row) -> AiEventOut:
     return AiEventOut(
         id=str(row["id"]),
+        alert_id=_optional_string(row["alert_id"]),
         source_event_id=row["source_event_id"],
         camera_id=str(row["camera_id"]),
         zone_id=_optional_string(row["zone_id"]),
@@ -96,6 +97,7 @@ def evidence_out(row) -> EvidenceOut:
     evidence_id = str(row["id"])
     return EvidenceOut(
         id=evidence_id,
+        alert_id=_optional_string(row["alert_id"]),
         ai_event_id=str(row["ai_event_id"]),
         camera_id=str(row["camera_id"]),
         evidence_type=row["evidence_type"],
@@ -107,6 +109,29 @@ def evidence_out(row) -> EvidenceOut:
         captured_at=_stringify(row["captured_at"]),
         created_at=_stringify(row["created_at"]),
         media_url="/api/evidence/{}/media".format(evidence_id),
+    )
+
+
+def alert_out(row) -> AlertOut:
+    return AlertOut(
+        id=str(row["id"]),
+        dedup_key=row["dedup_key"],
+        camera_id=str(row["camera_id"]),
+        zone_id=_optional_string(row["zone_id"]),
+        rule_config_id=_optional_string(row["rule_config_id"]),
+        rule_type=row["rule_type"],
+        object_type=row["object_type"],
+        risk_level=row["risk_level"],
+        lifecycle_status=row["lifecycle_status"],
+        active_source_count=row["active_source_count"],
+        first_sequence_number=row["first_sequence_number"],
+        last_sequence_number=row["last_sequence_number"],
+        started_at=_stringify(row["started_at"]),
+        last_seen_at=_stringify(row["last_seen_at"]),
+        ended_at=_optional_time(row["ended_at"]),
+        payload=_json_value(row["payload"]),
+        created_at=_stringify(row["created_at"]),
+        updated_at=_stringify(row["updated_at"]),
     )
 
 

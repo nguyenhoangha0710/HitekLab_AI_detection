@@ -48,6 +48,7 @@ class AiEventRepository:
         values = (
             event_id,
             camera["tenant_id"],
+            payload.get("alert_id"),
             payload["source_event_id"],
             payload["camera_id"],
             payload.get("zone_id"),
@@ -71,13 +72,14 @@ class AiEventRepository:
             """
             INSERT INTO ai_event
                 (
-                    id, tenant_id, source_event_id, camera_id, zone_id, rule_config_id,
+                    id, tenant_id, alert_id, source_event_id, camera_id, zone_id, rule_config_id,
                     event_type, object_type, track_id, confidence, lifecycle_status,
                     first_sequence_number, last_sequence_number, started_at, last_seen_at,
                     ended_at, payload, created_at, updated_at
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_event_id) DO UPDATE SET
+                alert_id = excluded.alert_id,
                 lifecycle_status = excluded.lifecycle_status,
                 last_sequence_number = excluded.last_sequence_number,
                 last_seen_at = excluded.last_seen_at,

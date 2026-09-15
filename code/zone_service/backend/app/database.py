@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS rule_config (
 CREATE TABLE IF NOT EXISTS ai_event (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    alert_id TEXT REFERENCES alert(id) ON DELETE SET NULL,
     source_event_id TEXT NOT NULL UNIQUE,
     camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
     zone_id TEXT REFERENCES zone(id) ON DELETE SET NULL,
@@ -105,9 +106,32 @@ CREATE TABLE IF NOT EXISTS ai_event (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS alert (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    dedup_key TEXT NOT NULL,
+    camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
+    zone_id TEXT REFERENCES zone(id) ON DELETE SET NULL,
+    rule_config_id TEXT REFERENCES rule_config(id) ON DELETE SET NULL,
+    rule_type TEXT NOT NULL,
+    object_type TEXT,
+    risk_level TEXT NOT NULL DEFAULT 'medium',
+    lifecycle_status TEXT NOT NULL DEFAULT 'active',
+    active_source_count INTEGER NOT NULL DEFAULT 1,
+    first_sequence_number INTEGER,
+    last_sequence_number INTEGER,
+    started_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    ended_at TEXT,
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS evidence (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    alert_id TEXT REFERENCES alert(id) ON DELETE CASCADE,
     ai_event_id TEXT NOT NULL REFERENCES ai_event(id) ON DELETE CASCADE,
     camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
     evidence_type TEXT NOT NULL,
@@ -127,6 +151,10 @@ CREATE INDEX IF NOT EXISTS idx_reference_frame_camera_id ON camera_reference_fra
 CREATE INDEX IF NOT EXISTS idx_ai_event_camera_id ON ai_event(camera_id);
 CREATE INDEX IF NOT EXISTS idx_ai_event_zone_id ON ai_event(zone_id);
 CREATE INDEX IF NOT EXISTS idx_ai_event_started_at ON ai_event(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_tenant_id ON alert(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_alert_dedup_key ON alert(dedup_key);
+CREATE INDEX IF NOT EXISTS idx_alert_camera_id ON alert(camera_id);
+CREATE INDEX IF NOT EXISTS idx_alert_last_seen_at ON alert(last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_evidence_ai_event_id ON evidence(ai_event_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_camera_id ON evidence(camera_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_captured_at ON evidence(captured_at DESC);
@@ -203,7 +231,12 @@ class Database:
         self._add_sqlite_column_if_missing(connection, "rule_config", "active_start_time", "TEXT")
         self._add_sqlite_column_if_missing(connection, "rule_config", "active_end_time", "TEXT")
         self._ensure_sqlite_ai_event_table(connection)
+        self._ensure_sqlite_alert_table(connection)
         self._ensure_sqlite_evidence_table(connection)
+        self._add_sqlite_column_if_missing(connection, "ai_event", "alert_id", "TEXT")
+        self._add_sqlite_column_if_missing(connection, "evidence", "alert_id", "TEXT")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_ai_event_alert_id ON ai_event(alert_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_evidence_alert_id ON evidence(alert_id)")
         connection.execute(
             """
             UPDATE camera
@@ -248,6 +281,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS ai_event (
                 id TEXT PRIMARY KEY,
                 tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+                alert_id TEXT REFERENCES alert(id) ON DELETE SET NULL,
                 source_event_id TEXT NOT NULL UNIQUE,
                 camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
                 zone_id TEXT REFERENCES zone(id) ON DELETE SET NULL,
@@ -272,12 +306,44 @@ class Database:
             """
         )
 
+    def _ensure_sqlite_alert_table(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS alert (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+                dedup_key TEXT NOT NULL,
+                camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
+                zone_id TEXT REFERENCES zone(id) ON DELETE SET NULL,
+                rule_config_id TEXT REFERENCES rule_config(id) ON DELETE SET NULL,
+                rule_type TEXT NOT NULL,
+                object_type TEXT,
+                risk_level TEXT NOT NULL DEFAULT 'medium',
+                lifecycle_status TEXT NOT NULL DEFAULT 'active',
+                active_source_count INTEGER NOT NULL DEFAULT 1,
+                first_sequence_number INTEGER,
+                last_sequence_number INTEGER,
+                started_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                ended_at TEXT,
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_alert_tenant_id ON alert(tenant_id);
+            CREATE INDEX IF NOT EXISTS idx_alert_dedup_key ON alert(dedup_key);
+            CREATE INDEX IF NOT EXISTS idx_alert_camera_id ON alert(camera_id);
+            CREATE INDEX IF NOT EXISTS idx_alert_last_seen_at ON alert(last_seen_at DESC);
+            """
+        )
+
     def _ensure_sqlite_evidence_table(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS evidence (
                 id TEXT PRIMARY KEY,
                 tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+                alert_id TEXT REFERENCES alert(id) ON DELETE CASCADE,
                 ai_event_id TEXT NOT NULL REFERENCES ai_event(id) ON DELETE CASCADE,
                 camera_id TEXT NOT NULL REFERENCES camera(id) ON DELETE CASCADE,
                 evidence_type TEXT NOT NULL,

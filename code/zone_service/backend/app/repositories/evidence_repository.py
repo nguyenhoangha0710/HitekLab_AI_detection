@@ -35,6 +35,16 @@ class EvidenceRepository:
     def get(self, evidence_id: str) -> Optional[sqlite3.Row]:
         return self.database.fetchone(self.connection, "SELECT * FROM evidence WHERE id = ?", (evidence_id,))
 
+    def exists_for_alert(self, alert_id: Optional[str]) -> bool:
+        if not alert_id:
+            return False
+        row = self.database.fetchone(
+            self.connection,
+            "SELECT id FROM evidence WHERE alert_id = ?",
+            (alert_id,),
+        )
+        return row is not None
+
     def exists_for_event(self, ai_event_id: str, frame_id: Optional[str]) -> bool:
         if frame_id:
             row = self.database.fetchone(
@@ -67,9 +77,9 @@ class EvidenceRepository:
             INSERT INTO evidence
                 (
                     id, tenant_id, ai_event_id, camera_id, evidence_type, storage_key,
-                    mime_type, file_size, frame_id, sequence_number, captured_at, created_at
+                    alert_id, mime_type, file_size, frame_id, sequence_number, captured_at, created_at
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 evidence_id,
@@ -78,6 +88,7 @@ class EvidenceRepository:
                 payload["camera_id"],
                 payload.get("evidence_type", "snapshot"),
                 payload["storage_key"],
+                payload.get("alert_id"),
                 payload.get("mime_type", "image/jpeg"),
                 payload.get("file_size"),
                 payload.get("frame_id"),
