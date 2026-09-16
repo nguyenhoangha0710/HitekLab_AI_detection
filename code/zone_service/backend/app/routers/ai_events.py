@@ -1,7 +1,4 @@
 import json
-import urllib.request
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -15,7 +12,9 @@ from ..repositories.alert_repository import AlertRepository
 from ..repositories.evidence_repository import EvidenceRepository
 from ..serializers import ai_event_out, alert_out, evidence_out, evidence_path
 from ..services.evidence_capture_service import EvidenceCaptureService
+from ..services.evidence_policy_service import should_capture_alert_evidence as _should_capture_alert_evidence
 from ..services.evidence_storage_service import EvidenceStorageService
+from ..services.evidence_video_request_service import request_video_evidence, video_storage_key
 
 
 def create_ai_event_router(database: Database, settings: ZoneServiceSettings) -> APIRouter:
@@ -49,7 +48,7 @@ def create_ai_event_router(database: Database, settings: ZoneServiceSettings) ->
             if row is None:
                 raise HTTPException(status_code=404, detail="Camera not found")
             _capture_snapshot_evidence(connection, database, settings, row, data)
-            _request_video_evidence(settings, row, data)
+            request_video_evidence(settings, row, data)
             return ai_event_out(row)
 
     @router.get("/api/evidence", response_model=List[EvidenceOut])
@@ -118,7 +117,7 @@ def create_ai_event_router(database: Database, settings: ZoneServiceSettings) ->
         if not content:
             raise HTTPException(status_code=400, detail="Uploaded evidence video is empty")
 
-        storage_key = payload.get("storage_key") or _video_storage_key(payload, file.filename)
+        storage_key = payload.get("storage_key") or video_storage_key(payload, file.filename)
         mime_type = file.content_type or "video/mp4"
         file_size = EvidenceStorageService(settings).save_bytes(storage_key, content, mime_type)
 
@@ -182,78 +181,3 @@ def _capture_snapshot_evidence(connection, database: Database, settings: ZoneSer
             "captured_at": payload.get("last_seen_at") or payload["started_at"],
         }
     )
-
-
-def _request_video_evidence(settings: ZoneServiceSettings, event_row, payload: dict) -> None:
-    if not settings.evidence_video_enabled:
-        return
-
-    event_payload = payload.get("payload") or {}
-    request_payload = {
-        "ai_event_id": str(event_row["id"]),
-        "alert_id": payload.get("alert_id"),
-        "camera_id": payload["camera_id"],
-        "frame_id": event_payload.get("frame_id"),
-        "sequence_number": payload.get("last_sequence_number"),
-        "captured_at": payload.get("last_seen_at") or payload["started_at"],
-        "pre_seconds": settings.evidence_video_pre_seconds,
-        "post_seconds": settings.evidence_video_post_seconds,
-        "fps": settings.evidence_video_fps,
-        "upload_url": settings.evidence_video_upload_url,
-    }
-    url = "{}/api/evidence-recordings".format(settings.edge_gateway_base_url)
-    body = json.dumps(request_payload, separators=(",", ":")).encode("utf-8")
-    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        urllib.request.urlopen(request, timeout=1).read()
-    except Exception:
-        return
-
-
-def _should_capture_alert_evidence(
-    repository: EvidenceRepository,
-    alert_id: Optional[str],
-    payload: dict,
-    interval_seconds: int,
-) -> bool:
-    latest = repository.latest_for_alert(alert_id)
-    if latest is None:
-        return True
-    previous = _parse_time(latest["captured_at"])
-    current = _parse_time(payload.get("last_seen_at") or payload["started_at"])
-    if previous is None or current is None:
-        return False
-    return (current - previous).total_seconds() >= interval_seconds
-
-
-def _parse_time(value) -> Optional[datetime]:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    text = str(value).replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _video_storage_key(payload: dict, filename: Optional[str]) -> str:
-    ai_event_id = _safe_path_part(str(payload["ai_event_id"]))
-    camera_id = _safe_path_part(str(payload["camera_id"]))
-    captured_at = _parse_time(payload.get("captured_at")) or datetime.now(timezone.utc)
-    suffix = Path(filename or "clip.mp4").suffix or ".mp4"
-    return "evidence/{}/{}/{:04d}/{:02d}/{:02d}/{}/clip{}".format(
-        _safe_path_part(str(payload.get("tenant_id") or "default")),
-        camera_id,
-        captured_at.year,
-        captured_at.month,
-        captured_at.day,
-        ai_event_id,
-        suffix,
-    )
-
-
-def _safe_path_part(value: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in value)

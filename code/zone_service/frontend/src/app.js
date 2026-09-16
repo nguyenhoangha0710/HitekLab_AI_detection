@@ -1,3 +1,6 @@
+import { api } from "./core/api.js";
+import { createEvidenceTab } from "./evidence/evidence_tab.js";
+
 const state = {
   cameras: [],
   selectedCameraId: null,
@@ -54,42 +57,26 @@ const els = {
   pointCount: document.getElementById("pointCount"),
 };
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `${response.status} ${response.statusText}`);
-  }
-  if (response.status === 204) return null;
-  return response.json();
-}
+const evidenceTab = createEvidenceTab({
+  els,
+  state,
+  api,
+  cameraById,
+  ruleLabel,
+  escapeHtml,
+  setStatus,
+});
 
 async function loadCameras() {
   state.cameras = await api("/api/cameras");
   els.statusText.textContent = `${state.cameras.length} cameras loaded`;
   renderCameraList();
-  renderEvidenceCameraFilter();
+  evidenceTab.renderCameraFilter();
   renderLiveGrid();
   renderYoloGrid();
   if (state.cameras.length && !state.selectedCameraId) {
     await selectCamera(state.cameras[0].id);
   }
-}
-
-function renderEvidenceCameraFilter() {
-  if (!els.evidenceCameraFilter) return;
-  const currentValue = els.evidenceCameraFilter.value;
-  els.evidenceCameraFilter.innerHTML = `<option value="">All cameras</option>`;
-  state.cameras.forEach((camera) => {
-    const option = document.createElement("option");
-    option.value = camera.id;
-    option.textContent = camera.name;
-    els.evidenceCameraFilter.appendChild(option);
-  });
-  els.evidenceCameraFilter.value = currentValue;
 }
 
 function cameraById(cameraId) {
@@ -800,7 +787,7 @@ function publishRuleViolationEvent(ruleState, zone, rule, detection, result, now
       ruleState.aiEventId = event.id;
       ruleState.aiEventStatus = "created";
       if (document.getElementById("evidencePanel")?.classList.contains("active")) {
-        loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
+        evidenceTab.load().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
       }
     })
     .catch((error) => {
@@ -808,81 +795,6 @@ function publishRuleViolationEvent(ruleState, zone, rule, detection, result, now
       ruleState.aiEventError = error.message;
       setStatus(`AI event save failed: ${error.message}`);
     });
-}
-
-async function loadEvidence() {
-  if (!els.evidenceGrid) return;
-  const cameraId = els.evidenceCameraFilter?.value || "";
-  const labelParams = new URLSearchParams({ limit: "500" });
-  if (cameraId) labelParams.set("camera_id", cameraId);
-
-  const evidenceParams = new URLSearchParams({ limit: "100", evidence_type: "video_clip" });
-  if (cameraId) evidenceParams.set("camera_id", cameraId);
-  if (els.evidenceEventTypeFilter?.value) evidenceParams.set("event_type", els.evidenceEventTypeFilter.value);
-  if (els.evidenceStatusFilter?.value) evidenceParams.set("status", els.evidenceStatusFilter.value);
-  if (els.evidenceFromFilter?.value) evidenceParams.set("from", datetimeLocalToIso(els.evidenceFromFilter.value));
-  if (els.evidenceToFilter?.value) evidenceParams.set("to", datetimeLocalToIso(els.evidenceToFilter.value));
-
-  const [events, alerts, evidence] = await Promise.all([
-    api(`/api/ai-events?${labelParams.toString()}`),
-    api(`/api/alerts?${labelParams.toString()}`),
-    api(`/api/evidence?${evidenceParams.toString()}`),
-  ]);
-  state.aiEvents = events;
-  state.alerts = alerts;
-  state.evidence = evidence;
-  renderEvidence();
-}
-
-function renderEvidence() {
-  if (!els.evidenceGrid) return;
-  const eventById = new Map(state.aiEvents.map((event) => [event.id, event]));
-  const alertById = new Map(state.alerts.map((alert) => [alert.id, alert]));
-  const videoEvidence = state.evidence.filter(
-    (item) => item.evidence_type === "video_clip" || String(item.mime_type || "").startsWith("video/")
-  );
-  if (!videoEvidence.length) {
-    els.evidenceGrid.innerHTML = `<div class="zone-card"><p>No video evidence clips found for these filters.</p></div>`;
-    return;
-  }
-
-  els.evidenceGrid.innerHTML = videoEvidence
-    .map((item) => {
-      const event = eventById.get(item.ai_event_id);
-      const alert = item.alert_id ? alertById.get(item.alert_id) : null;
-      const camera = cameraById(item.camera_id);
-      const eventType = alert ? ruleLabel(alert.rule_type) : event ? ruleLabel(event.event_type) : "AI Event";
-      const objectType = alert?.object_type || event?.object_type;
-      const objectLabel = objectType ? `${objectType} ${event?.track_id || ""}`.trim() : "object";
-      const sequence = item.sequence_number !== null && item.sequence_number !== undefined ? item.sequence_number : "-";
-      const sourceCount = alert ? ` | sources ${alert.active_source_count}` : "";
-      const mediaUrl = `${escapeHtml(item.media_url)}?t=${Date.now()}`;
-      const videoMeta = `<span>Video: ${escapeHtml(item.status || "-")} | ${escapeHtml(item.codec || "-")} | ${
-        item.duration_seconds ? Number(item.duration_seconds).toFixed(1) : "-"
-      }s</span>`;
-      return `
-        <article class="evidence-card">
-          <header>
-            <h2>${escapeHtml(camera?.name || item.camera_id)}</h2>
-            <p>${escapeHtml(eventType)} | ${escapeHtml(objectLabel)} | seq ${escapeHtml(sequence)}${escapeHtml(sourceCount)}</p>
-          </header>
-          <video controls muted preload="metadata" src="${mediaUrl}"></video>
-          <div class="evidence-meta">
-            <span>Captured: ${escapeHtml(item.captured_at)}</span>
-            <span>Evidence: ${escapeHtml(item.evidence_type)} | ${escapeHtml(item.mime_type)}</span>
-            ${videoMeta}
-            <span>Alert: ${escapeHtml(item.alert_id || "-")}</span>
-            <span>Event: ${escapeHtml(item.ai_event_id)}</span>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function datetimeLocalToIso(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
 
 function buildSourceEventId(ruleState, rule, result) {
@@ -1235,7 +1147,7 @@ function activateTab(tabName) {
   tab.classList.add("active");
   panel.classList.add("active");
   if (tabName === "evidence") {
-    loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
+    evidenceTab.load().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
   }
 }
 
@@ -1249,17 +1161,7 @@ window.addEventListener("resize", () => {
 });
 
 els.captureButton.addEventListener("click", captureReferenceFrame);
-els.refreshEvidenceButton?.addEventListener("click", () => {
-  loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
-});
-els.evidenceCameraFilter?.addEventListener("change", () => {
-  loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
-});
-[els.evidenceEventTypeFilter, els.evidenceStatusFilter, els.evidenceFromFilter, els.evidenceToFilter].forEach((filter) => {
-  filter?.addEventListener("change", () => {
-    loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
-  });
-});
+evidenceTab.bind();
 els.saveZoneButton.addEventListener("click", saveZone);
 els.clearButton.addEventListener("click", clearDraft);
 els.undoButton.addEventListener("click", undoPoint);
