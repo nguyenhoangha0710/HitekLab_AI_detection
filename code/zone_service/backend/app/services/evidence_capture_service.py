@@ -2,11 +2,14 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple
 
+from ..config import ZoneServiceSettings
+from .evidence_storage_service import EvidenceStorageService
+
 
 class EvidenceCaptureService:
-    def __init__(self, edge_gateway_base_url: str, evidence_dir: Path) -> None:
-        self.edge_gateway_base_url = edge_gateway_base_url.rstrip("/")
-        self.evidence_dir = Path(evidence_dir)
+    def __init__(self, settings: ZoneServiceSettings) -> None:
+        self.edge_gateway_base_url = settings.edge_gateway_base_url.rstrip("/")
+        self.storage = EvidenceStorageService(settings)
 
     def capture_snapshot(self, camera_id: str, ai_event_id: str, frame_id: Optional[str]) -> Tuple[str, int]:
         if frame_id:
@@ -23,7 +26,6 @@ class EvidenceCaptureService:
         safe_event_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in ai_event_id)
         safe_filename = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in filename)
         relative_path = Path(camera_id) / safe_event_id / safe_filename
-        absolute_path = self.evidence_dir / relative_path
-        absolute_path.parent.mkdir(parents=True, exist_ok=True)
-        absolute_path.write_bytes(image_bytes)
-        return relative_path.as_posix(), len(image_bytes)
+        storage_key = relative_path.as_posix()
+        file_size = self.storage.save_bytes(storage_key, image_bytes, "image/jpeg")
+        return storage_key, file_size

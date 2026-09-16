@@ -45,6 +45,15 @@ class EvidenceRepository:
         )
         return row is not None
 
+    def latest_for_alert(self, alert_id: Optional[str]) -> Optional[sqlite3.Row]:
+        if not alert_id:
+            return None
+        return self.database.fetchone(
+            self.connection,
+            "SELECT * FROM evidence WHERE alert_id = ? ORDER BY captured_at DESC, created_at DESC LIMIT 1",
+            (alert_id,),
+        )
+
     def exists_for_event(self, ai_event_id: str, frame_id: Optional[str]) -> bool:
         if frame_id:
             row = self.database.fetchone(

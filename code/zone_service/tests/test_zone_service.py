@@ -11,9 +11,11 @@ from backend.app.database import Database
 from backend.app.repositories.ai_event_repository import AiEventRepository
 from backend.app.repositories.alert_repository import AlertRepository
 from backend.app.repositories.camera_repository import CameraRepository
+from backend.app.repositories.evidence_repository import EvidenceRepository
 from backend.app.repositories.reference_frame_repository import ReferenceFrameRepository
 from backend.app.repositories.rule_config_repository import RuleConfigRepository
 from backend.app.repositories.zone_repository import ZoneRepository
+from backend.app.routers.ai_events import _should_capture_alert_evidence
 from backend.app.routers.cameras import create_camera_router
 from backend.app.routers.ai_events import create_ai_event_router
 from backend.app.routers.zones import create_zone_router
@@ -233,6 +235,98 @@ class ZoneServiceTests(unittest.TestCase):
         self.assertEqual(1, len(alerts))
         self.assertEqual(2, second["active_source_count"])
         self.assertEqual(20, second["last_sequence_number"])
+
+    def test_alert_lifecycle_resolves_stale_active_alert(self):
+        with self.database.session() as connection:
+            repository = AlertRepository(connection)
+            alert = repository.upsert_for_violation(
+                {
+                    "source_event_id": "event-stale",
+                    "camera_id": "camera-1",
+                    "zone_id": None,
+                    "rule_config_id": None,
+                    "event_type": "loitering",
+                    "object_type": "person",
+                    "track_id": "person-1",
+                    "first_sequence_number": 1,
+                    "last_sequence_number": 1,
+                    "started_at": "2026-09-15T00:00:00Z",
+                    "last_seen_at": "2026-09-15T00:00:00Z",
+                    "payload": {"frame_id": "frame-1"},
+                }
+            )
+            resolved_count = repository.resolve_stale(30, now="2026-09-15T00:00:31Z")
+            resolved = repository.get(alert["id"])
+
+        self.assertEqual(1, resolved_count)
+        self.assertEqual("resolved", resolved["lifecycle_status"])
+        self.assertEqual("2026-09-15T00:00:31Z", resolved["ended_at"])
+
+    def test_evidence_interval_allows_periodic_snapshots_for_same_alert(self):
+        with self.database.session() as connection:
+            alert_repository = AlertRepository(connection)
+            alert = alert_repository.upsert_for_violation(
+                {
+                    "source_event_id": "event-evidence-1",
+                    "camera_id": "camera-1",
+                    "zone_id": None,
+                    "rule_config_id": None,
+                    "event_type": "loitering",
+                    "object_type": "person",
+                    "track_id": "person-1",
+                    "first_sequence_number": 1,
+                    "last_sequence_number": 1,
+                    "started_at": "2026-09-15T00:00:00Z",
+                    "last_seen_at": "2026-09-15T00:00:00Z",
+                    "payload": {"frame_id": "frame-1"},
+                }
+            )
+            ai_event = AiEventRepository(connection).upsert(
+                {
+                    "alert_id": alert["id"],
+                    "source_event_id": "event-evidence-1",
+                    "camera_id": "camera-1",
+                    "event_type": "loitering",
+                    "object_type": "person",
+                    "track_id": "person-1",
+                    "first_sequence_number": 1,
+                    "last_sequence_number": 1,
+                    "started_at": "2026-09-15T00:00:00Z",
+                    "last_seen_at": "2026-09-15T00:00:00Z",
+                    "payload": {"frame_id": "frame-1"},
+                }
+            )
+            evidence_repository = EvidenceRepository(connection)
+            evidence_repository.create(
+                {
+                    "ai_event_id": ai_event["id"],
+                    "alert_id": alert["id"],
+                    "camera_id": "camera-1",
+                    "evidence_type": "snapshot",
+                    "storage_key": "camera-1/event-evidence-1/frame-1.jpg",
+                    "mime_type": "image/jpeg",
+                    "file_size": 100,
+                    "frame_id": "frame-1",
+                    "sequence_number": 1,
+                    "captured_at": "2026-09-15T00:00:00Z",
+                }
+            )
+
+            should_skip = _should_capture_alert_evidence(
+                evidence_repository,
+                alert["id"],
+                {"started_at": "2026-09-15T00:00:00Z", "last_seen_at": "2026-09-15T00:01:00Z"},
+                120,
+            )
+            should_capture = _should_capture_alert_evidence(
+                evidence_repository,
+                alert["id"],
+                {"started_at": "2026-09-15T00:00:00Z", "last_seen_at": "2026-09-15T00:02:01Z"},
+                120,
+            )
+
+        self.assertFalse(should_skip)
+        self.assertTrue(should_capture)
 
     def test_rule_update_persists_duration_and_active_time(self):
         zone_payload = {

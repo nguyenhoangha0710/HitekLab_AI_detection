@@ -33,6 +33,38 @@ class AlertRepository:
     def get(self, alert_id: str) -> Optional[sqlite3.Row]:
         return self.database.fetchone(self.connection, "SELECT * FROM alert WHERE id = ?", (alert_id,))
 
+    def resolve_stale(self, grace_seconds: int, now: Optional[str] = None) -> int:
+        now_text = now or utc_iso()
+        now_time = self._parse_time(now_text)
+        if now_time is None:
+            return 0
+
+        active_alerts = self.database.fetchall(
+            self.connection,
+            "SELECT id, last_seen_at FROM alert WHERE lifecycle_status = 'active'",
+            (),
+        )
+        resolved_count = 0
+        for alert in active_alerts:
+            last_seen = self._parse_time(alert["last_seen_at"])
+            if last_seen is None:
+                continue
+            if (now_time - last_seen).total_seconds() <= grace_seconds:
+                continue
+            self.database.execute(
+                self.connection,
+                """
+                UPDATE alert
+                SET lifecycle_status = 'resolved',
+                    ended_at = ?,
+                    updated_at = ?
+                WHERE id = ? AND lifecycle_status = 'active'
+                """,
+                (now_text, now_text, alert["id"]),
+            )
+            resolved_count += 1
+        return resolved_count
+
     def upsert_for_violation(self, payload: Dict[str, Any]) -> Optional[sqlite3.Row]:
         camera = self.database.fetchone(
             self.connection,
