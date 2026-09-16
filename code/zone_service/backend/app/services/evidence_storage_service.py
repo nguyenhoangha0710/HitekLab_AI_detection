@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from io import BytesIO
+import mimetypes
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -52,7 +53,8 @@ class EvidenceStorageService:
         path = self.local_path(storage_key)
         if path is None or not path.exists():
             raise FileNotFoundError(storage_key)
-        return path.read_bytes(), "image/jpeg"
+        media_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        return path.read_bytes(), media_type
 
     def _save_to_local(self, storage_key: str, content: bytes) -> None:
         path = self.local_path(storage_key)

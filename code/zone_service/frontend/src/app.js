@@ -840,16 +840,26 @@ function renderEvidence() {
       const objectLabel = objectType ? `${objectType} ${event?.track_id || ""}`.trim() : "object";
       const sequence = item.sequence_number !== null && item.sequence_number !== undefined ? item.sequence_number : "-";
       const sourceCount = alert ? ` | sources ${alert.active_source_count}` : "";
+      const mediaUrl = `${escapeHtml(item.media_url)}?t=${Date.now()}`;
+      const media = item.mime_type && item.mime_type.startsWith("video/")
+        ? `<video controls muted preload="metadata" src="${mediaUrl}"></video>`
+        : `<img src="${mediaUrl}" alt="${escapeHtml(eventType)} evidence">`;
+      const videoMeta = item.evidence_type === "video_clip"
+        ? `<span>Video: ${escapeHtml(item.status || "-")} | ${escapeHtml(item.codec || "-")} | ${
+            item.duration_seconds ? Number(item.duration_seconds).toFixed(1) : "-"
+          }s</span>`
+        : "";
       return `
         <article class="evidence-card">
           <header>
             <h2>${escapeHtml(camera?.name || item.camera_id)}</h2>
             <p>${escapeHtml(eventType)} | ${escapeHtml(objectLabel)} | seq ${escapeHtml(sequence)}${escapeHtml(sourceCount)}</p>
           </header>
-          <img src="${escapeHtml(item.media_url)}?t=${Date.now()}" alt="${escapeHtml(eventType)} evidence">
+          ${media}
           <div class="evidence-meta">
             <span>Captured: ${escapeHtml(item.captured_at)}</span>
             <span>Evidence: ${escapeHtml(item.evidence_type)} | ${escapeHtml(item.mime_type)}</span>
+            ${videoMeta}
             <span>Alert: ${escapeHtml(item.alert_id || "-")}</span>
             <span>Event: ${escapeHtml(item.ai_event_id)}</span>
           </div>

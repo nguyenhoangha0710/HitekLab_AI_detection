@@ -114,6 +114,7 @@ class ZoneServiceTests(unittest.TestCase):
         self.assertIn("/api/ai-events", paths)
         self.assertIn("/api/alerts", paths)
         self.assertIn("/api/evidence", paths)
+        self.assertIn("/api/evidence/video", paths)
 
     def test_camera_response_uses_zone_service_urls(self):
         from backend.app.serializers import camera_out

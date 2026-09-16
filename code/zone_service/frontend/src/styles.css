@@ -491,7 +491,8 @@ select {
   font-size: 11px;
 }
 
-.evidence-card img {
+.evidence-card img,
+.evidence-card video {
   display: block;
   width: 100%;
   aspect-ratio: 16 / 9;

@@ -141,6 +141,14 @@ CREATE TABLE IF NOT EXISTS evidence (
     frame_id TEXT,
     sequence_number INTEGER,
     captured_at TEXT NOT NULL,
+    started_at TEXT,
+    ended_at TEXT,
+    duration_seconds REAL,
+    codec TEXT,
+    fps REAL,
+    frame_width INTEGER,
+    frame_height INTEGER,
+    status TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -235,6 +243,14 @@ class Database:
         self._ensure_sqlite_evidence_table(connection)
         self._add_sqlite_column_if_missing(connection, "ai_event", "alert_id", "TEXT")
         self._add_sqlite_column_if_missing(connection, "evidence", "alert_id", "TEXT")
+        self._add_sqlite_column_if_missing(connection, "evidence", "started_at", "TEXT")
+        self._add_sqlite_column_if_missing(connection, "evidence", "ended_at", "TEXT")
+        self._add_sqlite_column_if_missing(connection, "evidence", "duration_seconds", "REAL")
+        self._add_sqlite_column_if_missing(connection, "evidence", "codec", "TEXT")
+        self._add_sqlite_column_if_missing(connection, "evidence", "fps", "REAL")
+        self._add_sqlite_column_if_missing(connection, "evidence", "frame_width", "INTEGER")
+        self._add_sqlite_column_if_missing(connection, "evidence", "frame_height", "INTEGER")
+        self._add_sqlite_column_if_missing(connection, "evidence", "status", "TEXT")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_ai_event_alert_id ON ai_event(alert_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_evidence_alert_id ON evidence(alert_id)")
         connection.execute(
@@ -353,6 +369,14 @@ class Database:
                 frame_id TEXT,
                 sequence_number INTEGER,
                 captured_at TEXT NOT NULL,
+                started_at TEXT,
+                ended_at TEXT,
+                duration_seconds REAL,
+                codec TEXT,
+                fps REAL,
+                frame_width INTEGER,
+                frame_height INTEGER,
+                status TEXT,
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_evidence_ai_event_id ON evidence(ai_event_id);

@@ -86,9 +86,11 @@ class EvidenceRepository:
             INSERT INTO evidence
                 (
                     id, tenant_id, ai_event_id, camera_id, evidence_type, storage_key,
-                    alert_id, mime_type, file_size, frame_id, sequence_number, captured_at, created_at
+                    alert_id, mime_type, file_size, frame_id, sequence_number, captured_at,
+                    started_at, ended_at, duration_seconds, codec, fps, frame_width,
+                    frame_height, status, created_at
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 evidence_id,
@@ -103,6 +105,14 @@ class EvidenceRepository:
                 payload.get("frame_id"),
                 payload.get("sequence_number"),
                 payload["captured_at"],
+                payload.get("started_at"),
+                payload.get("ended_at"),
+                payload.get("duration_seconds"),
+                payload.get("codec"),
+                payload.get("fps"),
+                payload.get("frame_width"),
+                payload.get("frame_height"),
+                payload.get("status"),
                 now,
             ),
         )

@@ -25,6 +25,11 @@ class ZoneServiceSettings:
     minio_secret_key: Optional[str] = None
     minio_bucket: str = "hitek-evidence"
     minio_secure: bool = False
+    evidence_video_enabled: bool = True
+    evidence_video_pre_seconds: float = 5.0
+    evidence_video_post_seconds: float = 5.0
+    evidence_video_fps: float = 10.0
+    evidence_video_upload_url: str = "http://localhost:8010/api/evidence/video"
 
 
 def load_settings() -> ZoneServiceSettings:
@@ -53,4 +58,9 @@ def load_settings() -> ZoneServiceSettings:
         minio_secret_key=os.getenv("MINIO_SECRET_KEY"),
         minio_bucket=os.getenv("MINIO_BUCKET", "hitek-evidence"),
         minio_secure=os.getenv("MINIO_SECURE", "false").lower() in {"1", "true", "yes"},
+        evidence_video_enabled=os.getenv("EVIDENCE_VIDEO_ENABLED", "true").lower() in {"1", "true", "yes"},
+        evidence_video_pre_seconds=float(os.getenv("EVIDENCE_VIDEO_PRE_SECONDS", "5")),
+        evidence_video_post_seconds=float(os.getenv("EVIDENCE_VIDEO_POST_SECONDS", "5")),
+        evidence_video_fps=float(os.getenv("EVIDENCE_VIDEO_FPS", "10")),
+        evidence_video_upload_url=os.getenv("EVIDENCE_VIDEO_UPLOAD_URL", "http://localhost:8010/api/evidence/video"),
     )

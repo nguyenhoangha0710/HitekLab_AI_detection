@@ -147,6 +147,14 @@ class EvidenceCreate(BaseModel):
     frame_id: Optional[str] = None
     sequence_number: Optional[int] = None
     captured_at: str
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    codec: Optional[str] = Field(None, max_length=50)
+    fps: Optional[float] = Field(None, gt=0)
+    frame_width: Optional[int] = Field(None, gt=0)
+    frame_height: Optional[int] = Field(None, gt=0)
+    status: Optional[str] = Field(None, max_length=50)
 
 
 class EvidenceOut(BaseModel):
@@ -161,6 +169,14 @@ class EvidenceOut(BaseModel):
     frame_id: Optional[str] = None
     sequence_number: Optional[int] = None
     captured_at: str
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    codec: Optional[str] = None
+    fps: Optional[float] = None
+    frame_width: Optional[int] = None
+    frame_height: Optional[int] = None
+    status: Optional[str] = None
     created_at: str
     media_url: str
 

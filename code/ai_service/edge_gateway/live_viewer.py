@@ -2,6 +2,7 @@ import logging
 import threading
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Deque, Dict, Iterable, List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -12,6 +13,7 @@ from common.models import CameraQueueSummary
 from common.time_utils import to_iso_utc
 
 from .config import CameraIngestConfig
+from .evidence_recorder import EvidenceFrame, EvidenceRecordingRequest, VideoEvidenceRecorder
 
 
 LOGGER = logging.getLogger(__name__)
@@ -113,6 +115,26 @@ class LiveFrameHub:
         with self._condition:
             return self._history_by_frame_id.get(camera_id, {}).get(frame_id)
 
+    def frames_between(self, camera_id: str, start_at: datetime, end_at: datetime) -> List[EvidenceFrame]:
+        with self._condition:
+            history = list(self._history.get(camera_id, []))
+        frames: List[EvidenceFrame] = []
+        for frame in history:
+            captured_at = _parse_time(frame.captured_at)
+            if captured_at is None or captured_at < start_at or captured_at > end_at:
+                continue
+            frames.append(
+                EvidenceFrame(
+                    frame_id=frame.frame_id,
+                    sequence_number=frame.sequence_number,
+                    captured_at=frame.captured_at,
+                    image_bytes=frame.image_bytes,
+                    image_width=frame.image_width,
+                    image_height=frame.image_height,
+                )
+            )
+        return frames
+
     def cameras(self) -> List[dict]:
         with self._condition:
             return [
@@ -182,6 +204,7 @@ def create_live_viewer_app(
     cameras: List[CameraIngestConfig],
     detection_hub: Optional[DetectionHub] = None,
     viewer_mode: str = "live",
+    evidence_recorder: Optional[VideoEvidenceRecorder] = None,
 ) -> FastAPI:
     app = FastAPI(title="Hitek Edge Gateway Live Viewer")
     camera_map = {camera.camera_id: camera for camera in cameras}
@@ -292,6 +315,20 @@ def create_live_viewer_app(
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
+    @app.post("/api/evidence-recordings")
+    def create_evidence_recording(request: EvidenceRecordingRequest):
+        if request.camera_id not in camera_map:
+            raise HTTPException(status_code=404, detail="Unknown camera {}".format(request.camera_id))
+        if evidence_recorder is None:
+            raise HTTPException(status_code=503, detail="Evidence recorder is disabled")
+        job_id = evidence_recorder.start(request)
+        return {
+            "status": "accepted",
+            "job_id": job_id,
+            "camera_id": request.camera_id,
+            "ai_event_id": request.ai_event_id,
+        }
+
     @app.get("/viewer")
     def viewer():
         return HTMLResponse(_viewer_html(cameras, mode=viewer_mode))
@@ -314,16 +351,31 @@ def start_live_viewer_server(
     port: int,
     detection_hub: Optional[DetectionHub] = None,
     viewer_mode: str = "live",
+    evidence_recorder: Optional[VideoEvidenceRecorder] = None,
 ) -> threading.Thread:
     import uvicorn
 
-    app = create_live_viewer_app(hub, cameras, detection_hub=detection_hub, viewer_mode=viewer_mode)
+    app = create_live_viewer_app(
+        hub,
+        cameras,
+        detection_hub=detection_hub,
+        viewer_mode=viewer_mode,
+        evidence_recorder=evidence_recorder,
+    )
     config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="edge-live-viewer-server", daemon=True)
     thread.start()
     LOGGER.info("Edge live viewer started at http://%s:%s/viewer", host, port)
     return thread
+
+
+def _parse_time(value: str) -> Optional[datetime]:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _viewer_html(cameras: List[CameraIngestConfig], mode: str = "live") -> str:

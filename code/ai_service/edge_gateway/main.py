@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import List
 
 from .config import load_video_ingest_config
+from .evidence_recorder import VideoEvidenceRecorder
 from .live_viewer import DetectionHub, LiveFrameHub, start_live_viewer_server
 from .transport.modal_bbox_sender import AsyncModalBboxSender, FanOutFrameSink, WebSocketModalBboxSender
 from .transport.modal_http_sender import ModalFrameSender
@@ -59,9 +60,11 @@ def main() -> None:
             cameras=[replace(camera, target_fps=args.viewer_fps) for camera in ingest_config.cameras],
         )
     viewer_thread = None
+    evidence_recorder = None
     if args.transport in ("viewer", "viewer-ai"):
         live_hub = LiveFrameHub(ingest_config.cameras)
         detection_hub = DetectionHub()
+        evidence_recorder = VideoEvidenceRecorder(live_hub.frames_between)
         viewer_thread = start_live_viewer_server(
             live_hub,
             ingest_config.cameras,
@@ -69,6 +72,7 @@ def main() -> None:
             port=args.viewer_port,
             detection_hub=detection_hub,
             viewer_mode="sync" if args.transport == "viewer-ai" else "live",
+            evidence_recorder=evidence_recorder,
         )
         if args.transport == "viewer-ai":
             if args.modal_bbox_transport == "websocket":
@@ -148,6 +152,8 @@ def main() -> None:
         for thread in threads:
             thread.join(timeout=2.0)
         sender.close()
+        if evidence_recorder is not None:
+            evidence_recorder.close()
         if viewer_thread is not None:
             viewer_thread.join(timeout=1.0)
         for worker in workers:

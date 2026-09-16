@@ -232,11 +232,35 @@ CREATE TABLE IF NOT EXISTS evidence (
     frame_id varchar(255),
     sequence_number integer,
     captured_at timestamptz NOT NULL,
+    started_at timestamptz,
+    ended_at timestamptz,
+    duration_seconds double precision,
+    codec varchar(50),
+    fps double precision,
+    frame_width integer,
+    frame_height integer,
+    status varchar(50),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
 ALTER TABLE evidence
     ADD COLUMN IF NOT EXISTS alert_id uuid;
+ALTER TABLE evidence
+    ADD COLUMN IF NOT EXISTS started_at timestamptz;
+ALTER TABLE evidence
+    ADD COLUMN IF NOT EXISTS ended_at timestamptz;
+ALTER TABLE evidence
+    ADD COLUMN IF NOT EXISTS duration_seconds double precision;
+ALTER TABLE evidence
+    ADD COLUMN IF NOT EXISTS codec varchar(50);
+ALTER TABLE evidence
+    ADD COLUMN IF NOT EXISTS fps double precision;
+ALTER TABLE evidence
+    ADD COLUMN IF NOT EXISTS frame_width integer;
+ALTER TABLE evidence
+    ADD COLUMN IF NOT EXISTS frame_height integer;
+ALTER TABLE evidence
+    ADD COLUMN IF NOT EXISTS status varchar(50);
 
 DO $$
 BEGIN
