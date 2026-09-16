@@ -38,6 +38,10 @@ const els = {
   captureButton: document.getElementById("captureButton"),
   zoneCanvas: document.getElementById("zoneCanvas"),
   evidenceCameraFilter: document.getElementById("evidenceCameraFilter"),
+  evidenceEventTypeFilter: document.getElementById("evidenceEventTypeFilter"),
+  evidenceStatusFilter: document.getElementById("evidenceStatusFilter"),
+  evidenceFromFilter: document.getElementById("evidenceFromFilter"),
+  evidenceToFilter: document.getElementById("evidenceToFilter"),
   evidenceGrid: document.getElementById("evidenceGrid"),
   refreshEvidenceButton: document.getElementById("refreshEvidenceButton"),
   emptyState: document.getElementById("emptyState"),
@@ -809,11 +813,20 @@ function publishRuleViolationEvent(ruleState, zone, rule, detection, result, now
 async function loadEvidence() {
   if (!els.evidenceGrid) return;
   const cameraId = els.evidenceCameraFilter?.value || "";
-  const query = cameraId ? `?camera_id=${encodeURIComponent(cameraId)}&limit=100` : "?limit=100";
+  const labelParams = new URLSearchParams({ limit: "500" });
+  if (cameraId) labelParams.set("camera_id", cameraId);
+
+  const evidenceParams = new URLSearchParams({ limit: "100", evidence_type: "video_clip" });
+  if (cameraId) evidenceParams.set("camera_id", cameraId);
+  if (els.evidenceEventTypeFilter?.value) evidenceParams.set("event_type", els.evidenceEventTypeFilter.value);
+  if (els.evidenceStatusFilter?.value) evidenceParams.set("status", els.evidenceStatusFilter.value);
+  if (els.evidenceFromFilter?.value) evidenceParams.set("from", datetimeLocalToIso(els.evidenceFromFilter.value));
+  if (els.evidenceToFilter?.value) evidenceParams.set("to", datetimeLocalToIso(els.evidenceToFilter.value));
+
   const [events, alerts, evidence] = await Promise.all([
-    api(`/api/ai-events${query}`),
-    api(`/api/alerts${query}`),
-    api(`/api/evidence${query}`),
+    api(`/api/ai-events?${labelParams.toString()}`),
+    api(`/api/alerts?${labelParams.toString()}`),
+    api(`/api/evidence?${evidenceParams.toString()}`),
   ]);
   state.aiEvents = events;
   state.alerts = alerts;
@@ -825,12 +838,15 @@ function renderEvidence() {
   if (!els.evidenceGrid) return;
   const eventById = new Map(state.aiEvents.map((event) => [event.id, event]));
   const alertById = new Map(state.alerts.map((alert) => [alert.id, alert]));
-  if (!state.evidence.length) {
-    els.evidenceGrid.innerHTML = `<div class="zone-card"><p>No evidence snapshots yet.</p></div>`;
+  const videoEvidence = state.evidence.filter(
+    (item) => item.evidence_type === "video_clip" || String(item.mime_type || "").startsWith("video/")
+  );
+  if (!videoEvidence.length) {
+    els.evidenceGrid.innerHTML = `<div class="zone-card"><p>No video evidence clips found for these filters.</p></div>`;
     return;
   }
 
-  els.evidenceGrid.innerHTML = state.evidence
+  els.evidenceGrid.innerHTML = videoEvidence
     .map((item) => {
       const event = eventById.get(item.ai_event_id);
       const alert = item.alert_id ? alertById.get(item.alert_id) : null;
@@ -841,21 +857,16 @@ function renderEvidence() {
       const sequence = item.sequence_number !== null && item.sequence_number !== undefined ? item.sequence_number : "-";
       const sourceCount = alert ? ` | sources ${alert.active_source_count}` : "";
       const mediaUrl = `${escapeHtml(item.media_url)}?t=${Date.now()}`;
-      const media = item.mime_type && item.mime_type.startsWith("video/")
-        ? `<video controls muted preload="metadata" src="${mediaUrl}"></video>`
-        : `<img src="${mediaUrl}" alt="${escapeHtml(eventType)} evidence">`;
-      const videoMeta = item.evidence_type === "video_clip"
-        ? `<span>Video: ${escapeHtml(item.status || "-")} | ${escapeHtml(item.codec || "-")} | ${
-            item.duration_seconds ? Number(item.duration_seconds).toFixed(1) : "-"
-          }s</span>`
-        : "";
+      const videoMeta = `<span>Video: ${escapeHtml(item.status || "-")} | ${escapeHtml(item.codec || "-")} | ${
+        item.duration_seconds ? Number(item.duration_seconds).toFixed(1) : "-"
+      }s</span>`;
       return `
         <article class="evidence-card">
           <header>
             <h2>${escapeHtml(camera?.name || item.camera_id)}</h2>
             <p>${escapeHtml(eventType)} | ${escapeHtml(objectLabel)} | seq ${escapeHtml(sequence)}${escapeHtml(sourceCount)}</p>
           </header>
-          ${media}
+          <video controls muted preload="metadata" src="${mediaUrl}"></video>
           <div class="evidence-meta">
             <span>Captured: ${escapeHtml(item.captured_at)}</span>
             <span>Evidence: ${escapeHtml(item.evidence_type)} | ${escapeHtml(item.mime_type)}</span>
@@ -867,6 +878,11 @@ function renderEvidence() {
       `;
     })
     .join("");
+}
+
+function datetimeLocalToIso(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
 
 function buildSourceEventId(ruleState, rule, result) {
@@ -1238,6 +1254,11 @@ els.refreshEvidenceButton?.addEventListener("click", () => {
 });
 els.evidenceCameraFilter?.addEventListener("change", () => {
   loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
+});
+[els.evidenceEventTypeFilter, els.evidenceStatusFilter, els.evidenceFromFilter, els.evidenceToFilter].forEach((filter) => {
+  filter?.addEventListener("change", () => {
+    loadEvidence().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
+  });
 });
 els.saveZoneButton.addEventListener("click", saveZone);
 els.clearButton.addEventListener("click", clearDraft);

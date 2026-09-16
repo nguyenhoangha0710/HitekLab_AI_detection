@@ -53,9 +53,29 @@ def create_ai_event_router(database: Database, settings: ZoneServiceSettings) ->
             return ai_event_out(row)
 
     @router.get("/api/evidence", response_model=List[EvidenceOut])
-    def list_evidence(camera_id: Optional[str] = None, limit: int = Query(100, ge=1, le=500)):
+    def list_evidence(
+        camera_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        evidence_type: Optional[str] = None,
+        status: Optional[str] = None,
+        from_time: Optional[str] = Query(None, alias="from"),
+        to_time: Optional[str] = Query(None, alias="to"),
+        zone_id: Optional[str] = None,
+        object_type: Optional[str] = None,
+        limit: int = Query(100, ge=1, le=500),
+    ):
         with database.session() as connection:
-            rows = EvidenceRepository(connection, database).list(camera_id=camera_id, limit=limit)
+            rows = EvidenceRepository(connection, database).list(
+                camera_id=camera_id,
+                event_type=event_type,
+                evidence_type=evidence_type,
+                status=status,
+                from_time=from_time,
+                to_time=to_time,
+                zone_id=zone_id,
+                object_type=object_type,
+                limit=limit,
+            )
             return [evidence_out(row) for row in rows]
 
     @router.get("/api/ai-events/{ai_event_id}/evidence", response_model=List[EvidenceOut])

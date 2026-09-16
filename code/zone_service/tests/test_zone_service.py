@@ -329,6 +329,98 @@ class ZoneServiceTests(unittest.TestCase):
         self.assertFalse(should_skip)
         self.assertTrue(should_capture)
 
+    def test_evidence_list_filters_video_metadata(self):
+        with self.database.session() as connection:
+            event_repository = AiEventRepository(connection)
+            loitering_event = event_repository.upsert(
+                {
+                    "source_event_id": "event-video-1",
+                    "camera_id": "camera-1",
+                    "event_type": "loitering",
+                    "object_type": "person",
+                    "track_id": "person-1",
+                    "first_sequence_number": 1,
+                    "last_sequence_number": 10,
+                    "started_at": "2026-09-15T00:00:00Z",
+                    "last_seen_at": "2026-09-15T00:00:10Z",
+                    "payload": {"frame_id": "frame-10"},
+                }
+            )
+            crowd_event = event_repository.upsert(
+                {
+                    "source_event_id": "event-video-2",
+                    "camera_id": "camera-1",
+                    "event_type": "crowd_limit",
+                    "object_type": "person",
+                    "track_id": "3 objects",
+                    "first_sequence_number": 20,
+                    "last_sequence_number": 30,
+                    "started_at": "2026-09-15T00:01:00Z",
+                    "last_seen_at": "2026-09-15T00:01:10Z",
+                    "payload": {"frame_id": "frame-30"},
+                }
+            )
+            evidence_repository = EvidenceRepository(connection)
+            expected = evidence_repository.create(
+                {
+                    "ai_event_id": loitering_event["id"],
+                    "camera_id": "camera-1",
+                    "evidence_type": "video_clip",
+                    "storage_key": "camera-1/event-video-1/clip.mp4",
+                    "mime_type": "video/mp4",
+                    "file_size": 1000,
+                    "frame_id": "frame-10",
+                    "sequence_number": 10,
+                    "captured_at": "2026-09-15T00:00:10Z",
+                    "started_at": "2026-09-15T00:00:05Z",
+                    "ended_at": "2026-09-15T00:00:15Z",
+                    "duration_seconds": 10,
+                    "codec": "h264",
+                    "fps": 10,
+                    "status": "completed",
+                }
+            )
+            evidence_repository.create(
+                {
+                    "ai_event_id": loitering_event["id"],
+                    "camera_id": "camera-1",
+                    "evidence_type": "snapshot",
+                    "storage_key": "camera-1/event-video-1/frame-10.jpg",
+                    "mime_type": "image/jpeg",
+                    "file_size": 100,
+                    "frame_id": "frame-10",
+                    "sequence_number": 10,
+                    "captured_at": "2026-09-15T00:00:10Z",
+                }
+            )
+            evidence_repository.create(
+                {
+                    "ai_event_id": crowd_event["id"],
+                    "camera_id": "camera-1",
+                    "evidence_type": "video_clip",
+                    "storage_key": "camera-1/event-video-2/clip.mp4",
+                    "mime_type": "video/mp4",
+                    "file_size": 1000,
+                    "frame_id": "frame-30",
+                    "sequence_number": 30,
+                    "captured_at": "2026-09-15T00:01:10Z",
+                    "status": "completed",
+                }
+            )
+
+            rows = evidence_repository.list(
+                camera_id="camera-1",
+                evidence_type="video_clip",
+                event_type="loitering",
+                status="completed",
+                from_time="2026-09-15T00:00:00Z",
+                to_time="2026-09-15T00:00:59Z",
+            )
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual(expected["id"], rows[0]["id"])
+        self.assertEqual("video_clip", rows[0]["evidence_type"])
+
     def test_rule_update_persists_duration_and_active_time(self):
         zone_payload = {
             "name": "Rule Edit Area",

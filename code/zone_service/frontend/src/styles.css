@@ -451,14 +451,19 @@ select {
 }
 
 .evidence-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   align-items: end;
   gap: 10px;
   margin-bottom: 14px;
 }
 
 .evidence-head label {
-  width: min(360px, 100%);
+  min-width: 0;
+}
+
+.evidence-head .primary {
+  min-height: 36px;
 }
 
 .evidence-grid {

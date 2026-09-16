@@ -11,18 +11,59 @@ class EvidenceRepository:
         self.connection = connection
         self.database = database or _SqliteConnectionAdapter()
 
-    def list(self, camera_id: Optional[str] = None, limit: int = 100) -> List[sqlite3.Row]:
+    def list(
+        self,
+        camera_id: Optional[str] = None,
+        limit: int = 100,
+        evidence_type: Optional[str] = None,
+        event_type: Optional[str] = None,
+        status: Optional[str] = None,
+        from_time: Optional[str] = None,
+        to_time: Optional[str] = None,
+        zone_id: Optional[str] = None,
+        object_type: Optional[str] = None,
+    ) -> List[sqlite3.Row]:
         bounded_limit = max(1, min(int(limit), 500))
+        clauses = []
+        params = []
         if camera_id:
-            return self.database.fetchall(
-                self.connection,
-                "SELECT * FROM evidence WHERE camera_id = ? ORDER BY captured_at DESC, created_at DESC LIMIT ?",
-                (camera_id, bounded_limit),
-            )
+            clauses.append("evidence.camera_id = ?")
+            params.append(camera_id)
+        if evidence_type:
+            clauses.append("evidence.evidence_type = ?")
+            params.append(evidence_type)
+        if status:
+            clauses.append("evidence.status = ?")
+            params.append(status)
+        if from_time:
+            clauses.append("evidence.captured_at >= ?")
+            params.append(from_time)
+        if to_time:
+            clauses.append("evidence.captured_at <= ?")
+            params.append(to_time)
+        if event_type:
+            clauses.append("ai_event.event_type = ?")
+            params.append(event_type)
+        if zone_id:
+            clauses.append("ai_event.zone_id = ?")
+            params.append(zone_id)
+        if object_type:
+            clauses.append("ai_event.object_type = ?")
+            params.append(object_type)
+
+        where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(bounded_limit)
         return self.database.fetchall(
             self.connection,
-            "SELECT * FROM evidence ORDER BY captured_at DESC, created_at DESC LIMIT ?",
-            (bounded_limit,),
+            """
+            SELECT evidence.*
+            FROM evidence
+            LEFT JOIN ai_event ON ai_event.id = evidence.ai_event_id
+            {}
+            ORDER BY evidence.captured_at DESC, evidence.created_at DESC
+            LIMIT ?
+            """.format(where_sql),
+            tuple(params),
         )
 
     def list_by_event(self, ai_event_id: str) -> List[sqlite3.Row]:

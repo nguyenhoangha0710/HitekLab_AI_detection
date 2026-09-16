@@ -91,6 +91,34 @@
                   <option value="">All cameras</option>
                 </select>
               </label>
+              <label>
+                Event type
+                <select id="evidenceEventTypeFilter">
+                  <option value="">All events</option>
+                  <option value="person_intrusion">Person intrusion</option>
+                  <option value="vehicle_intrusion">Vehicle intrusion</option>
+                  <option value="loitering">Loitering</option>
+                  <option value="crowd_limit">Crowd limit</option>
+                  <option value="vehicle_stopping">Vehicle stopping</option>
+                </select>
+              </label>
+              <label>
+                Status
+                <select id="evidenceStatusFilter">
+                  <option value="">All statuses</option>
+                  <option value="completed">Completed</option>
+                  <option value="partial">Partial</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </label>
+              <label>
+                From
+                <input id="evidenceFromFilter" type="datetime-local">
+              </label>
+              <label>
+                To
+                <input id="evidenceToFilter" type="datetime-local">
+              </label>
               <button class="primary" id="refreshEvidenceButton">Refresh</button>
             </div>
             <div class="evidence-grid" id="evidenceGrid"></div>
@@ -99,6 +127,6 @@
       </section>
     </div>
 
-    <script src="/static/app.js?v=alert-bottom-banner-v1"></script>
+    <script src="/static/app.js?v=evidence-video-filters-v1"></script>
   </body>
 </html>
