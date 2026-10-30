@@ -57,19 +57,22 @@ Copy-Item .env.example .env      # PowerShell
 
 | Biến | Giá trị | Ý nghĩa |
 | --- | --- | --- |
-| `COMPOSE_PROFILES` | `ai` / để trống | `ai` = chạy AI Service trong Docker |
+| `COMPOSE_PROFILES` | `ai,backend` | Bật thêm service: `ai` = AI Service, `backend` = Backend API .NET. Bỏ phần nào thì service đó không chạy trong Docker |
 | `EDGE_MODE` | `viewer-ai` / `viewer` | `viewer` = chỉ xem video, không gửi frame cho AI |
 | `AI_SERVICE_WS_URL` | `ws://ai-service:8003/ws/detect` | Đổi thành `ws://host.docker.internal:8003/ws/detect` nếu AI chạy trên máy host |
 | `CAMERA1_VIDEO`, `CAMERA2_VIDEO` | tên file | File trong `code/data/videos/` |
 | `YOLO_DEVICE` | `cpu` / `0` | Thiết bị chạy YOLO |
 | `AI_FPS` | `5` | Số frame/giây gửi AI cho mỗi camera; máy yếu giảm xuống 2–3 |
 | `ALERT_MODE` | `backend` / `local` | `backend` = gửi sự kiện sang Backend API, Backend tạo cảnh báo. `local` = chạy thử không cần Backend |
-| `BACKEND_BASE_URL` | `http://host.docker.internal:5250` | Địa chỉ Backend API nhìn từ container zone-service |
+| `BACKEND_BASE_URL` | `http://backend:5250` | Địa chỉ Backend nhìn từ zone-service. Đổi thành `http://host.docker.internal:5250` khi Backend chạy ngoài Docker |
+| `BACKEND_PROJECT`, `BACKEND_DLL` | đường dẫn `.csproj`, tên `.dll` | Project .NET cần build (xem `code/backend/README.md`) |
 | `*_PORT` | | Đổi nếu bị trùng cổng trên máy |
 
 ## 5. Chạy hệ thống
 
-Chọn **một** trong bốn chế độ.
+Chọn **một** trong bốn chế độ. Ở mọi chế độ, `COMPOSE_PROFILES` quyết định AI Service và Backend có chạy trong Docker không.
+
+> **Khi chưa có code Backend trong `code/backend/`** (đang chờ nhóm Backend gộp code), bỏ `backend` khỏi `COMPOSE_PROFILES` (ví dụ `COMPOSE_PROFILES=ai`). Nếu không, lúc build sẽ báo `khong thay ... .csproj`. Lúc này Backend chạy riêng, nên đặt `BACKEND_BASE_URL=http://host.docker.internal:5250`.
 
 ### A. Toàn bộ trong Docker, AI chạy CPU (mặc định, khuyên dùng cho Backend/Frontend/Kiểm thử)
 
@@ -98,7 +101,7 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 Tiện để sửa code AI và reload nhanh, dùng GPU trực tiếp. Trong `.env`:
 
 ```dotenv
-COMPOSE_PROFILES=
+COMPOSE_PROFILES=backend
 AI_SERVICE_WS_URL=ws://host.docker.internal:8003/ws/detect
 ```
 
@@ -117,28 +120,29 @@ docker compose up -d --build
 
 AI Service trên host tự gọi Zone Service ở `http://localhost:8010` (đổi bằng biến `ZONE_SERVICE_URL`).
 
-### Kết nối Backend API (cảnh báo chính thức)
+### Backend API (cảnh báo chính thức)
 
-Cảnh báo do **Backend API** (.NET, cổng 5250) và Risk Engine tạo ra, gộp cả sự kiện camera lẫn cảm biến. Zone Service chỉ ghi `ai_event`, chụp bằng chứng rồi chuyển tiếp sang Backend:
+Backend API (.NET 8, cổng 5250) nằm trong compose với tên service `backend`, code đặt ở `code/backend/`. Khi `COMPOSE_PROFILES` có `backend`, lệnh `docker compose up` bật luôn Backend. Backend và Risk Engine tạo cảnh báo, gộp cả sự kiện camera lẫn cảm biến. Zone Service chỉ ghi `ai_event`, chụp bằng chứng rồi chuyển tiếp:
 
 ```text
 AI Service ─► Zone Service POST /api/ai-events
                 ├─ ghi ai_event (commit)
-                ├─ POST {BACKEND_BASE_URL}/api/v1/auth/token   (lấy token, giữ 12h, gặp 401 thì lấy lại)
-                ├─ POST {BACKEND_BASE_URL}/api/v1/events        {cameraId, areaId, objectType, confidence, occurredAt, aiEventId}
+                ├─ POST http://backend:5250/api/v1/auth/token   (lấy token, giữ 12h, gặp 401 thì lấy lại)
+                ├─ POST http://backend:5250/api/v1/events        {cameraId, areaId, objectType, confidence, occurredAt, aiEventId}
                 └─ nhận {alertId} ─► gán vào ai_event.alert_id và evidence.alert_id
+Backend ─► postgres:5432 (database hitek_ai_iot dùng chung)
 ```
 
-- Chạy Backend trước theo hướng dẫn của nhóm Backend; mặc định Zone Service gọi `http://host.docker.internal:5250`.
+- Trong Docker, Backend kết nối database qua `Host=postgres`. Compose truyền sẵn biến `ConnectionStrings__Default`.
 - Vi phạm còn kéo dài thì AI gửi lại mỗi giây (`RULE_EVENT_HEARTBEAT_SECONDS=1`), vì Risk Engine chỉ giữ nguồn AI trong 3 giây.
 - Backend tắt hoặc báo lỗi thì `ai_event` vẫn được lưu (`alert_id` để trống), AI vẫn chạy bình thường.
-- Chưa có Backend để test: đặt `ALERT_MODE=local` trong `.env`, Zone Service tự gom alert như trước.
+- Không có Backend mà vẫn muốn thấy cảnh báo: `ALERT_MODE=local`, khi đó Zone Service tự gom alert như trước.
 - Xem tình trạng kết nối: http://localhost:8010/api/integration/backend (số event đã gửi, số alertId nhận về, mã lỗi gần nhất).
 
 ### D. Chỉ xem video, không chạy AI
 
 ```dotenv
-COMPOSE_PROFILES=
+COMPOSE_PROFILES=backend
 EDGE_MODE=viewer
 ```
 
@@ -159,6 +163,7 @@ Các service phải ở trạng thái `running`; những service có healthcheck
 | http://localhost:8010 | **Dashboard**: Live Cameras, YOLO Detection, Zone Editor, Evidence |
 | http://localhost:8010/docs | Swagger API của Zone Service |
 | http://localhost:8010/api/integration/backend | Tình trạng gửi sự kiện sang Backend API |
+| http://localhost:5250 | Backend API (.NET); Swagger thường ở `/swagger` nếu Backend bật |
 | http://localhost:8003/health | Trạng thái AI Service (model, tracker, rule engine) |
 | http://localhost:8003/rules/status | Zone/rule AI đang dùng, số event đã gửi |
 | http://localhost:8003/docs | Swagger API của AI Service |
@@ -211,7 +216,23 @@ Code của `zone-service`, `edge-gateway`, `ai-service` được đóng vào ima
 - Test: `cd code\ai_service; python -m unittest discover -s tests`. `tests/test_rule_engine.py` chỉ cần Python, không cần YOLO.
 - Code chính: `local_bbox_service.py` (API), `rule_engine/` (zone, rule, event), `local_ai/byte_tracker.py`, `edge_gateway/`.
 
-### Nhóm Backend & Frontend (Zone Service)
+### Nhóm Backend & IoT (Backend API .NET)
+
+Hướng dẫn chi tiết, gồm cách đưa code vào repo và quy ước bảng database: [code/backend/README.md](code/backend/README.md). Tóm tắt khi đang code:
+
+```powershell
+docker compose stop backend
+# .env: BACKEND_BASE_URL=http://host.docker.internal:5250
+docker compose up -d zone-service            # zone-service nhận địa chỉ Backend mới
+cd code\backend
+dotnet run --project <Project>.csproj --urls http://0.0.0.0:5250
+```
+
+Chạy ngoài Docker thì Backend kết nối database bằng `Host=localhost;Port=5432;Database=hitek_ai_iot;Username=hitek_app;Password=hitek_app_password`. Code xong, trả `.env` về `BACKEND_BASE_URL=http://backend:5250` và chạy `docker compose up -d --build backend zone-service`.
+
+**Database dùng chung, mỗi bảng chỉ một bên sửa cấu trúc:** bảng camera, zone, rule, `ai_event`, `evidence` thuộc SQL trong `code/database/postgres/init/`. Bảng `alert`, sensor, risk rule thuộc Backend. Chi tiết trong `code/backend/README.md` mục 4.
+
+### Nhóm Zone Service (backend Python + dashboard)
 
 Chạy zone-service ngoài Docker, các service khác vẫn trong Docker:
 
@@ -234,9 +255,9 @@ uvicorn backend.app.main:app --app-dir code\zone_service --host 0.0.0.0 --port 8
 - Test: `cd code\zone_service; python -m unittest discover -s tests`.
 - Schema: `code/database/postgres/init/*.sql`. Zone Service chạy lại **tất cả** file này mỗi lần khởi động, nên script phải chạy lại được nhiều lần (`IF NOT EXISTS`, không `UPDATE` vô điều kiện). File mới đặt số tiếp theo (`006_...sql`), sau đó `docker compose up -d --build zone-service`.
 
-### Nhóm IoT (chưa có service)
+### Thêm MQTT broker (Mosquitto) cho IoT
 
-Khi thêm IoT Service hoặc Mosquitto: thêm service vào `docker-compose.yml`, biến cấu hình vào `.env.example`, cập nhật bảng cổng ở mục 6 của tài liệu này.
+Khi cần broker MQTT: thêm service `mosquitto` vào `docker-compose.yml` (Backend gọi bằng `mosquitto:1883`), thêm biến cấu hình vào `.env.example` và vào `backend.environment`, cập nhật bảng cổng ở mục 6.
 
 ### Nhóm Kiểm thử
 
@@ -266,7 +287,9 @@ Khi thêm IoT Service hoặc Mosquitto: thêm service vào `docker-compose.yml`,
 | Sửa SQL trong `init/` mà database không đổi | SQL được đóng vào image zone-service | `docker compose up -d --build zone-service`; nếu đổi cấu trúc bảng đã có dữ liệu thì `docker compose down -v` (mất dữ liệu cũ) |
 | `zone-service` khởi động lại liên tục | Postgres chưa sẵn sàng hoặc lỗi SQL | `docker compose logs zone-service postgres` |
 | Build báo lỗi mạng khi `pip install` | Mạng chặn PyPI hoặc download.pytorch.org | Thử lại mạng khác, hoặc dùng chế độ C với venv đã cài |
-| `/api/integration/backend` báo `BACKEND_UNREACHABLE` hoặc `AUTH_FAILED` | Backend chưa chạy, sai địa chỉ, sai clientId/secret | Kiểm tra Backend ở cổng 5250, `BACKEND_BASE_URL`, `BACKEND_CLIENT_ID`/`BACKEND_CLIENT_SECRET`; chạy thử không Backend thì `ALERT_MODE=local` |
+| Build báo `khong thay ... .csproj trong code/backend/` | Chưa có code Backend, hoặc `BACKEND_PROJECT` sai đường dẫn | Bỏ `backend` khỏi `COMPOSE_PROFILES`, hoặc sửa `BACKEND_PROJECT`/`BACKEND_DLL` cho đúng (xem `code/backend/README.md`) |
+| `backend` khởi động lại liên tục | Sai chuỗi kết nối DB, hoặc code đang ghi cứng `localhost` | `docker compose logs backend`; Backend phải đọc `ConnectionStrings__Default` (Host=`postgres`) |
+| `/api/integration/backend` báo `BACKEND_UNREACHABLE` hoặc `AUTH_FAILED` | Backend chưa chạy, `BACKEND_BASE_URL` không khớp cách chạy Backend, sai clientId/secret | Backend trong Docker thì `http://backend:5250`, ngoài Docker thì `http://host.docker.internal:5250`; kiểm tra `BACKEND_CLIENT_ID`/`BACKEND_CLIENT_SECRET`; chạy thử không Backend thì `ALERT_MODE=local` |
 | Báo `CAMERA_NOT_FOUND` / `AREA_NOT_FOUND` | Backend chưa có camera/khu vực trùng id với `config.docker.yaml` | Hai bên dùng chung `camera_id` và `location_id` (bảng `camera`, `location` trong Postgres) |
 | Báo `AI_EVENT_NOT_FOUND` | Backend đọc database khác với Zone Service | Backend và Zone Service phải dùng chung Postgres `hitek_ai_iot` |
 | Muốn làm lại từ đầu | | `docker compose down -v`, sau đó `docker compose up -d --build` |

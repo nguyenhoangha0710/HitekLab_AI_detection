@@ -61,3 +61,8 @@ code/data/videos/*
 *.mov
 *.webm
 !.env.example
+
+# .NET build output (code/backend)
+**/bin/
+**/obj/
+.vs/

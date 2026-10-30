@@ -2,7 +2,7 @@
 # Huong dan day du: HUONG_DAN_CHAY.md
 #
 #   cp .env.example .env          # (PowerShell: Copy-Item .env.example .env)
-#   docker compose up -d --build  # COMPOSE_PROFILES=ai trong .env -> chay ca AI Service
+#   docker compose up -d --build  # COMPOSE_PROFILES=ai,backend trong .env -> chay ca AI Service va Backend
 #
 # GPU NVIDIA: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 
@@ -148,6 +148,30 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  backend:
+    # Backend API .NET 8 (thiet bi, IoT, Event & Risk Engine, nguoi dung, canh bao).
+    # Source dat trong code/backend/ - xem code/backend/README.md.
+    # Chi chay khi bat profile "backend" (COMPOSE_PROFILES=ai,backend).
+    profiles: ["backend"]
+    build:
+      context: ./code/backend
+      args:
+        BACKEND_PROJECT: ${BACKEND_PROJECT:-Backend.Api/Backend.Api.csproj}
+        BACKEND_DLL: ${BACKEND_DLL:-Backend.Api.dll}
+    image: hitek-ai-iot/backend:local
+    container_name: hitek-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_URLS: http://+:5250
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ConnectionStrings__Default: &backend-db "Host=postgres;Port=5432;Database=${POSTGRES_DB:-hitek_ai_iot};Username=${POSTGRES_USER:-hitek_app};Password=${POSTGRES_PASSWORD:-hitek_app_password}"
+      ConnectionStrings__DefaultConnection: *backend-db
+    ports:
+      - "${BACKEND_PORT:-5250}:5250"
+    restart: unless-stopped
+
   zone-service:
     build:
       context: .
@@ -185,7 +209,7 @@ services:
       # backend: gui AI Event sang Backend API (/api/v1/events), Backend tao canh bao.
       # local  : Zone Service tu gom alert (chay thu khi khong co Backend).
       ALERT_MODE: ${ALERT_MODE:-backend}
-      BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://host.docker.internal:5250}
+      BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://backend:5250}
       BACKEND_CLIENT_ID: ${BACKEND_CLIENT_ID:-ai-service}
       BACKEND_CLIENT_SECRET: ${BACKEND_CLIENT_SECRET:-ai-service-dev-secret}
       BACKEND_TIMEOUT_SECONDS: ${BACKEND_TIMEOUT_SECONDS:-2}

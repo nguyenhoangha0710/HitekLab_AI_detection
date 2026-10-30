@@ -18,8 +18,11 @@ video (code/data/videos) ─► camera1/camera2 (FFmpeg) ─RTSP─► mediamtx
          │                                         │
          │ live video / frame theo frame_id        │ POST /api/ai-events
          ▼                                         ▼
-   zone-service :8010  ◄─────────────────────────────  (alert, snapshot, clip ±5s)
+   zone-service :8010  ◄─────────────────────────────  (ai_event, snapshot, clip ±5s)
    Dashboard + API  ──► postgres :5432 (metadata)  +  minio :9000 (ảnh / clip)
+         │ POST /api/v1/events
+         ▼
+   backend :5250 (.NET)  Risk Engine kết hợp camera + cảm biến ──► alert
 ```
 
 | Service | Thư mục | Nhóm phụ trách |
@@ -28,7 +31,7 @@ video (code/data/videos) ─► camera1/camera2 (FFmpeg) ─RTSP─► mediamtx
 | `ai-service` | `code/ai_service` (`local_bbox_service.py`, `rule_engine/`) | AI / Camera |
 | `zone-service` (backend + dashboard) | `code/zone_service` | Backend, Frontend |
 | Database | `code/database/postgres/init` | Backend |
-| IoT Service, Event & Risk Engine | *chưa có* | Backend & IoT |
+| `backend` (Backend API .NET 8: thiết bị, IoT, Event & Risk Engine, cảnh báo, người dùng) | `code/backend` (đang chờ gộp code) | Backend & IoT |
 
 ## Cấu trúc repo
 
@@ -40,7 +43,8 @@ video (code/data/videos) ─► camera1/camera2 (FFmpeg) ─RTSP─► mediamtx
 ├── HUONG_DAN_CHAY.md         # hướng dẫn cài đặt và chạy cho cả nhóm
 ├── code/
 │   ├── ai_service/           # Edge Gateway + AI Service (Dockerfile multi-stage)
-│   ├── zone_service/         # Backend FastAPI + frontend dashboard
+│   ├── zone_service/         # Zone Service FastAPI + dashboard (zone, AI event, bằng chứng)
+│   ├── backend/              # Backend API .NET 8 + Dockerfile mẫu
 │   ├── database/postgres/    # SQL khởi tạo schema + seed
 │   └── data/                 # video/ảnh test (không commit video lớn)
 └── docs/                     # API contract, contract Camera → AI
