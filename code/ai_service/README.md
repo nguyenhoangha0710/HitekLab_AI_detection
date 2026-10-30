@@ -7,7 +7,7 @@ Camera / video giả lập (FFmpeg) ──RTSP──► MediaMTX
   └─► Edge Gateway (Docker, :8002)
         ├─ live viewer / MJPEG / frame theo frame_id  ──► Zone Service :8010 ──► Dashboard
         └─ lấy mẫu AI_FPS ──WebSocket /ws/detect──► AI Service (host, :8003)
-                                                    YOLOv11 → ByteTrack → Rule Engine
+                                                    YOLOv11 → ByteTrack → hướng di chuyển → Rule Engine
                                                     ├─ trả detection + rule_engine.violations về Gateway
                                                     └─ POST /api/ai-events ──► Zone Service
                                                          ghi ai_event, chụp snapshot, xin clip ±5s
@@ -85,6 +85,25 @@ Kết quả mỗi frame AI Service trả về có thêm:
 }
 ```
 
+## Hướng di chuyển (`local_ai/motion.py`)
+
+Sau ByteTrack, AI Service lưu vị trí chân của mỗi `track_id` trong `MOTION_WINDOW_SECONDS`
+gần nhất, theo thời gian `captured_at`. Vector dịch chuyển bằng vị trí hiện tại trừ vị trí cũ
+nhất trong cửa sổ. Mỗi detection có thêm:
+
+```json
+"motion": {"direction": "left", "angle_deg": 180.0, "speed_px_s": 200.0, "dx": -200.0, "dy": 0.0, "window_seconds": 1.0}
+```
+
+- `direction`: `right`, `up-right`, `up`, `up-left`, `left`, `down-left`, `down`, `down-right`,
+  hoặc `stationary` (tốc độ < `MOTION_STATIONARY_SPEED_RATIO` × chiều rộng khung hình mỗi giây),
+  hoặc `unknown` (track mới, lịch sử chưa đủ nửa cửa sổ).
+- Trục y của ảnh hướng xuống, nên `up` là đi lên trên khung hình (với camera đặt cao thường là đi ra xa
+  camera), `down` là lại gần camera. `angle_deg`: 0° là sang phải, 90° là đi lên, tăng ngược chiều kim đồng hồ.
+- `speed_px_s` tính theo pixel trên khung hình, chưa quy ra mét.
+- Hướng được đưa vào AI Event (`payload.detection.motion`, `payload.contract.objects[].direction`),
+  vào `rule_engine.violations[].direction`, và hiện thành mũi tên trên nhãn ở tab YOLO Detection.
+
 ## Biến môi trường của AI Service
 
 | Biến | Mặc định | Ý nghĩa |
@@ -99,6 +118,8 @@ Kết quả mỗi frame AI Service trả về có thêm:
 | `RULE_EVENT_HEARTBEAT_SECONDS` | `1` | Chu kỳ gửi lại event đang active (Risk Engine của Backend chỉ giữ nguồn AI 3 giây). |
 | `RULE_STATE_EXPIRE_SECONDS` | `5` | Xóa state khi mất đối tượng quá N giây. |
 | `RULE_TIMEZONE_OFFSET_HOURS` | `7` | Múi giờ để so khung giờ active. |
+| `MOTION_WINDOW_SECONDS` | `1.0` | Cửa sổ thời gian để tính hướng di chuyển. |
+| `MOTION_STATIONARY_SPEED_RATIO` | `0.02` | Ngưỡng coi là đứng yên (tỷ lệ chiều rộng khung hình mỗi giây; 640px thì khoảng 13 px/s). |
 
 ## Chạy
 

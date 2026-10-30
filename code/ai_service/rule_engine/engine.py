@@ -358,6 +358,8 @@ class RuleEngine:
                 "bbox": obj.get("bbox"),
                 "foot_point": obj.get("foot_point"),
                 "dwell_time_seconds": obj.get("dwell_time_seconds"),
+                "direction": (obj.get("motion") or {}).get("direction"),
+                "speed_px_s": (obj.get("motion") or {}).get("speed_px_s"),
             }
             for obj in state.objects
         ]
@@ -395,6 +397,7 @@ class RuleEngine:
                         "confidence": detection.get("confidence"),
                         "bbox_xyxy": detection.get("bbox_xyxy"),
                         "track_id": detection.get("track_id"),
+                        "motion": detection.get("motion"),
                     }
                     if detection
                     else None
@@ -452,6 +455,7 @@ def _object_summary(detection: dict, point: Point, dwell_seconds: Optional[float
         "bbox": {"x1": bbox[0], "y1": bbox[1], "x2": bbox[2], "y2": bbox[3]},
         "foot_point": {"x": round(point[0], 1), "y": round(point[1], 1)},
         "dwell_time_seconds": round(dwell_seconds, 2) if dwell_seconds is not None else None,
+        "motion": detection.get("motion"),
     }
 
 
@@ -470,6 +474,7 @@ def _violation_summary(state: _ViolationState, zone: ZoneConfig, rule: RuleConfi
         "object_count": state.object_count,
         "elapsed_seconds": round(elapsed, 1),
         "sequence_number": state.last_sequence_number,
+        "direction": ((state.detection or {}).get("motion") or {}).get("direction") if not rule.is_crowd_rule else None,
     }
 
 

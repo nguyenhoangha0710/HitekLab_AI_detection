@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from common.time_utils import to_iso_utc, utc_now
 from local_ai.byte_tracker import MultiCameraByteTracker
 from local_ai.detector import COCO_CLASS_IDS, parse_coco_class_filter
+from local_ai.motion import MotionEstimator, MotionSettings
 from rule_engine import AiEventPublisher, RuleEngine, RuleEngineSettings, ZoneServiceConfigProvider
 
 
@@ -32,6 +33,10 @@ RULE_CONFIG_TTL_SECONDS = float(os.getenv("RULE_CONFIG_TTL_SECONDS", "10"))
 RULE_EVENT_HEARTBEAT_SECONDS = float(os.getenv("RULE_EVENT_HEARTBEAT_SECONDS", "1"))
 RULE_STATE_EXPIRE_SECONDS = float(os.getenv("RULE_STATE_EXPIRE_SECONDS", "5"))
 RULE_TIMEZONE_OFFSET_HOURS = float(os.getenv("RULE_TIMEZONE_OFFSET_HOURS", "7"))
+
+# Huong di chuyen: tinh tu lich su vi tri chan cua tung track trong MOTION_WINDOW_SECONDS.
+MOTION_WINDOW_SECONDS = float(os.getenv("MOTION_WINDOW_SECONDS", "1.0"))
+MOTION_STATIONARY_SPEED_RATIO = float(os.getenv("MOTION_STATIONARY_SPEED_RATIO", "0.02"))
 
 
 def utc_iso() -> str:
@@ -152,6 +157,10 @@ _detector: Optional[LocalYoloBboxDetector] = None
 _detector_lock = threading.Lock()
 _rule_engine: Optional[RuleEngine] = None
 _rule_engine_lock = threading.Lock()
+_motion = MotionEstimator(
+    MotionSettings(window_seconds=MOTION_WINDOW_SECONDS, stationary_speed_ratio=MOTION_STATIONARY_SPEED_RATIO)
+)
+_motion_lock = threading.Lock()
 
 
 def _parse_class_ids(value) -> List[int]:
@@ -199,8 +208,10 @@ def _get_rule_engine() -> Optional[RuleEngine]:
 
 
 def analyze_frame(payload: Dict) -> Dict:
-    """YOLO -> ByteTrack -> Rule Engine cho 1 frame."""
+    """YOLO -> ByteTrack -> huong di chuyen -> Rule Engine cho 1 frame."""
     result = _get_detector().detect(payload)
+    with _motion_lock:
+        _motion.update(result)
     engine = _get_rule_engine()
     if engine is None:
         result["rule_engine"] = {"enabled": False, "violations": []}
@@ -241,6 +252,11 @@ def health():
             "track_low_thresh": DEFAULT_TRACK_LOW_THRESH,
             "new_track_thresh": DEFAULT_NEW_TRACK_THRESH,
             "match_thresh": DEFAULT_TRACK_MATCH_THRESH,
+        },
+        "motion": {
+            "enabled": True,
+            "window_seconds": MOTION_WINDOW_SECONDS,
+            "stationary_speed_ratio": MOTION_STATIONARY_SPEED_RATIO,
         },
         "rule_engine": _rule_engine_status(),
         "timestamp": utc_iso(),

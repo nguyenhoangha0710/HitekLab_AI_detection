@@ -25,6 +25,18 @@ const state = {
 // Rule Engine da chuyen sang AI Service (code/ai_service/rule_engine).
 // Frontend chi hien thi vi pham ma AI Service tra ve trong result.rule_engine.
 const EVIDENCE_REFRESH_INTERVAL_MS = 5000;
+// Huong di chuyen do AI Service tinh (detection.motion.direction).
+const MOTION_ARROWS = {
+  right: "→",
+  "up-right": "↗",
+  up: "↑",
+  "up-left": "↖",
+  left: "←",
+  "down-left": "↙",
+  down: "↓",
+  "down-right": "↘",
+  stationary: "•",
+};
 
 const els = {
   cameraList: document.getElementById("cameraList"),
@@ -629,6 +641,7 @@ function renderRuleViolations(cameraId, result) {
     objectType: violation.object_type,
     trackId: violation.track_id,
     elapsedSeconds: Number(violation.elapsed_seconds || 0),
+    direction: violation.direction,
     sequenceNumber: violation.sequence_number,
   }));
   updateAlerts(alerts, now);
@@ -666,9 +679,9 @@ function renderAlertBanner() {
         const cameraName = camera ? camera.name : alert.cameraId;
         return `<div><strong>${escapeHtml(cameraName)}</strong> | ${escapeHtml(
           ruleLabel(alert.ruleType)
-        )} | ${escapeHtml(alert.objectType)} ${escapeHtml(alert.trackId)} in ${escapeHtml(
-          alert.zoneName
-        )} - ${Math.round(alert.elapsedSeconds)}s</div>`;
+        )} | ${escapeHtml(alert.objectType)} ${escapeHtml(alert.trackId)} ${escapeHtml(
+          MOTION_ARROWS[alert.direction] || ""
+        )} in ${escapeHtml(alert.zoneName)} - ${Math.round(alert.elapsedSeconds)}s</div>`;
       }
     )
     .join("");
@@ -770,7 +783,8 @@ function drawDetection(ctx, detection, frameWidth, frameHeight, viewport, match 
   const p2 = scalePoint({ x: box[2], y: box[3] }, frameWidth, frameHeight, viewport);
   const color = detection.class_name === "car" ? "#38bdf8" : "#39ff14";
   const track = detection.track_id !== undefined && detection.track_id !== null ? ` #${detection.track_id}` : "";
-  const label = `${detection.class_name}${track} ${Number(detection.confidence || 0).toFixed(2)}`;
+  const arrow = MOTION_ARROWS[detection.motion?.direction] || "";
+  const label = `${detection.class_name}${track} ${Number(detection.confidence || 0).toFixed(2)}${arrow ? ` ${arrow}` : ""}`;
   const matched = Boolean(match.matchedZones && match.matchedZones.length);
   const matchLabel = matchedZoneLabel(match.matchedZones || []);
 
