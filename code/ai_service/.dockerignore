@@ -1,5 +1,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.venv*/
 tests/
+models/
 *.pt
+*.onnx
+*.engine
+README.md

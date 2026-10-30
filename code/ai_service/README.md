@@ -100,25 +100,23 @@ Kết quả mỗi frame AI Service trả về có thêm:
 
 ## Chạy
 
-Terminal 1, AI Service trên host (cần GPU để chạy nhanh):
+Xem [HUONG_DAN_CHAY.md](../../HUONG_DAN_CHAY.md) ở thư mục gốc. Tóm tắt:
+
+- Toàn bộ trong Docker (AI chạy CPU): `docker compose up -d --build` với `COMPOSE_PROFILES=ai` trong `.env`.
+- AI chạy GPU trong Docker: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`.
+- AI chạy trên host để dev (`--reload`): đặt `COMPOSE_PROFILES=` và
+  `AI_SERVICE_WS_URL=ws://host.docker.internal:8003/ws/detect` trong `.env`, rồi:
 
 ```powershell
-cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
+cd code\ai_service
 ..\..\.venv12\Scripts\Activate.ps1
 pip install -r requirements-yolo.txt
-uvicorn local_bbox_service:app --host 0.0.0.0 --port 8003
+uvicorn local_bbox_service:app --host 0.0.0.0 --port 8003 --reload
 ```
 
-Terminal 2, toàn bộ phần còn lại bằng Docker:
-
-```powershell
-cd D:\NguyenHoangHa_nam4\Internship\HitekLab
-docker compose up --build
-```
-
-Mở dashboard: `http://localhost:8010`.
-
-Chỉ xem video, không chạy AI: `$env:EDGE_MODE="viewer"; docker compose up --build`.
+`Dockerfile` có 2 target: `edge-gateway` (nhẹ, không có torch) và `ai-service`
+(torch CPU mặc định; bản GPU dùng build arg `TORCH_INDEX_URL`). Model đặt trong
+`models/` (được mount vào container, tự tải `yolo11n.pt` nếu chưa có).
 
 ## API của AI Service
 

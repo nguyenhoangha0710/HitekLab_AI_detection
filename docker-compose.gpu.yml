@@ -1,0 +1,21 @@
+# Override cho may co GPU NVIDIA (Docker Desktop + WSL2 tren Windows, hoac nvidia-container-toolkit tren Linux).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# Kiem tra GPU: docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+
+services:
+  ai-service:
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+    image: hitek-ai-iot/ai-service:gpu
+    environment:
+      LOCAL_YOLO_DEVICE: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

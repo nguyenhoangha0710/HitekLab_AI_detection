@@ -1,0 +1,18 @@
+# Build context cua zone-service la thu muc goc repo.
+# Chi gui nhung gi Dockerfile can, tranh day .venv / video / bao cao vao Docker.
+.git/
+.venv*/
+venv*/
+**/__pycache__/
+**/*.pyc
+.env
+.env.*
+reports/
+docs/
+code/data/
+code/zone_service/data/
+code/zone_service/tests/
+
+# zone-service chi can config camera tu ai_service
+code/ai_service/*
+!code/ai_service/config.docker.yaml

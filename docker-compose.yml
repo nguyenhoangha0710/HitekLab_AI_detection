@@ -1,6 +1,30 @@
+# HITEK AI-IoT prototype
+# Huong dan day du: HUONG_DAN_CHAY.md
+#
+#   cp .env.example .env          # (PowerShell: Copy-Item .env.example .env)
+#   docker compose up -d --build  # COMPOSE_PROFILES=ai trong .env -> chay ca AI Service
+#
+# GPU NVIDIA: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+
 name: hitek-ai-iot
 
+x-camera-simulator: &camera-simulator
+  image: jrottenberg/ffmpeg:4.4-alpine
+  depends_on:
+    - mediamtx
+  volumes:
+    - ./code/data/videos:/videos:ro
+  entrypoint: ["sh", "-c"]
+  # Phat lap video thanh luong RTSP, gia lap camera IP.
+  command:
+    - >-
+      exec ffmpeg -hide_banner -loglevel warning -re -stream_loop -1
+      -i "/videos/$$VIDEO_FILE" -an -c:v libx264 -preset ultrafast -tune zerolatency
+      -f rtsp -rtsp_transport tcp "rtsp://mediamtx:8554/$$STREAM_NAME"
+  restart: unless-stopped
+
 services:
+  # ------------------------------------------------------------ ha tang
   postgres:
     image: postgres:16-alpine
     container_name: hitek-postgres
@@ -26,99 +50,52 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-hitek_minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-hitek_minio_password}
+    command: ["server", "/data", "--console-address", ":9001"]
     volumes:
       - minio-data:/data
     ports:
       - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
-    command: ["server", "/data", "--console-address", ":9001"]
     restart: unless-stopped
 
   mediamtx:
     image: bluenviron/mediamtx:latest
     container_name: hitek-mediamtx
     ports:
-      - "8554:8554"
+      - "${RTSP_PORT:-8554}:8554"
     restart: unless-stopped
 
+  # ------------------------------------------------- camera gia lap
   camera1:
-    image: jrottenberg/ffmpeg:4.4-alpine
-    container_name: hitek-camera1-simulator
-    depends_on:
-      - mediamtx
-    volumes:
-      - ./code/data/videos:/videos:ro
-    command:
-      - -hide_banner
-      - -loglevel
-      - warning
-      - -re
-      - -stream_loop
-      - "-1"
-      - -i
-      - /videos/neighbors_yard.ts
-      - -an
-      - -c:v
-      - libx264
-      - -preset
-      - ultrafast
-      - -tune
-      - zerolatency
-      - -f
-      - rtsp
-      - -rtsp_transport
-      - tcp
-      - rtsp://mediamtx:8554/camera1
-    restart: unless-stopped
+    <<: *camera-simulator
+    container_name: hitek-camera1
+    environment:
+      VIDEO_FILE: ${CAMERA1_VIDEO:-dummy_video_2.mp4}
+      STREAM_NAME: camera1
 
   camera2:
-    image: jrottenberg/ffmpeg:4.4-alpine
-    container_name: hitek-camera2-simulator
-    depends_on:
-      - mediamtx
-    volumes:
-      - ./code/data/videos:/videos:ro
-    command:
-      - -hide_banner
-      - -loglevel
-      - warning
-      - -re
-      - -stream_loop
-      - "-1"
-      - -i
-      - /videos/video_4_police.mp4
-      - -an
-      - -c:v
-      - libx264
-      - -preset
-      - ultrafast
-      - -tune
-      - zerolatency
-      - -f
-      - rtsp
-      - -rtsp_transport
-      - tcp
-      - rtsp://mediamtx:8554/camera2
-    restart: unless-stopped
+    <<: *camera-simulator
+    container_name: hitek-camera2
+    environment:
+      VIDEO_FILE: ${CAMERA2_VIDEO:-dummy_video_2.mp4}
+      STREAM_NAME: camera2
 
+  # ---------------------------------------------------- ung dung
   edge-gateway:
     build:
       context: ./code/ai_service
+      target: edge-gateway
+    image: hitek-ai-iot/edge-gateway:local
     container_name: hitek-edge-gateway
     depends_on:
-      mediamtx:
-        condition: service_started
-      camera1:
-        condition: service_started
-      camera2:
-        condition: service_started
+      - mediamtx
+      - camera1
+      - camera2
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      # viewer: chi stream video | viewer-ai: stream video + gui frame sang AI Service
       EDGE_MODE: ${EDGE_MODE:-viewer-ai}
-      # AI Service (local_bbox_service.py) chay tren may host de dung GPU, port 8003
-      AI_SERVICE_WS_URL: ${AI_SERVICE_WS_URL:-ws://host.docker.internal:8003/ws/detect}
+      AI_SERVICE_WS_URL: ${AI_SERVICE_WS_URL:-ws://ai-service:8003/ws/detect}
       AI_SERVICE_TRANSPORT: ${AI_SERVICE_TRANSPORT:-websocket}
       AI_SERVICE_TIMEOUT_SECONDS: "10"
       EDGE_AI_QUEUE_SIZE: ${EDGE_AI_QUEUE_SIZE:-4}
@@ -126,18 +103,56 @@ services:
       EDGE_AI_FPS: ${AI_FPS:-5}
       EDGE_VIEWER_HOST: "0.0.0.0"
       EDGE_VIEWER_PORT: "8002"
-      YOLO_CLASSES: "person,car,motorcycle"
-      YOLO_CONFIDENCE: "0.35"
+      YOLO_CLASSES: ${YOLO_CLASSES:-person,car,motorcycle}
+      YOLO_CONFIDENCE: ${YOLO_CONFIDENCE:-0.35}
       TENANT_ID: ${TENANT_ID:-demo-tenant}
-    expose:
-      - "8002"
-    command: ["python", "-m", "edge_gateway.main", "--config", "config.docker.yaml"]
+    ports:
+      - "${EDGE_GATEWAY_PORT:-8002}:8002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  ai-service:
+    # Chi chay khi bat profile "ai" (COMPOSE_PROFILES=ai trong .env hoac --profile ai).
+    profiles: ["ai"]
+    build:
+      context: ./code/ai_service
+      target: ai-service
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    image: hitek-ai-iot/ai-service:cpu
+    container_name: hitek-ai-service
+    environment:
+      ZONE_SERVICE_URL: http://zone-service:8010
+      LOCAL_YOLO_MODEL: models/${YOLO_MODEL:-yolo11n.pt}
+      LOCAL_YOLO_CLASSES: ${YOLO_CLASSES:-person,car,motorcycle}
+      LOCAL_YOLO_CONFIDENCE: ${YOLO_CONFIDENCE:-0.35}
+      LOCAL_YOLO_DEVICE: ${YOLO_DEVICE:-cpu}
+      RULE_ENGINE_ENABLED: ${RULE_ENGINE_ENABLED:-true}
+      RULE_CONFIG_TTL_SECONDS: ${RULE_CONFIG_TTL_SECONDS:-10}
+      RULE_EVENT_HEARTBEAT_SECONDS: ${RULE_EVENT_HEARTBEAT_SECONDS:-10}
+      RULE_TIMEZONE_OFFSET_HOURS: ${RULE_TIMEZONE_OFFSET_HOURS:-7}
+    volumes:
+      - ./code/ai_service/models:/app/models
+    ports:
+      - "${AI_SERVICE_PORT:-8003}:8003"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     restart: unless-stopped
 
   zone-service:
     build:
       context: .
       dockerfile: code/zone_service/Dockerfile
+    image: hitek-ai-iot/zone-service:local
     container_name: hitek-zone-service
     depends_on:
       postgres:
@@ -170,7 +185,13 @@ services:
     volumes:
       - zone-service-data:/app/code/zone_service/data
     ports:
-      - "8010:8010"
+      - "${ZONE_SERVICE_PORT:-8010}:8010"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

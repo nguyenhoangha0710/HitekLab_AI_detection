@@ -60,3 +60,4 @@ code/data/videos/*
 *.mkv
 *.mov
 *.webm
+!.env.example
