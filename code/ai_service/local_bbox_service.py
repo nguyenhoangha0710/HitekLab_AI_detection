@@ -29,6 +29,7 @@ DEFAULT_TRACK_MATCH_THRESH = float(os.getenv("LOCAL_TRACK_MATCH_THRESH", "0.8"))
 # Rule Engine: lay zone/rule tu Zone Service va gui AI Event nguoc lai Zone Service.
 RULE_ENGINE_ENABLED = os.getenv("RULE_ENGINE_ENABLED", "true").lower() in {"1", "true", "yes"}
 ZONE_SERVICE_URL = os.getenv("ZONE_SERVICE_URL", "http://localhost:8010").rstrip("/")
+SERVICE_API_KEY = os.getenv("SERVICE_API_KEY") or None
 RULE_CONFIG_TTL_SECONDS = float(os.getenv("RULE_CONFIG_TTL_SECONDS", "10"))
 RULE_EVENT_HEARTBEAT_SECONDS = float(os.getenv("RULE_EVENT_HEARTBEAT_SECONDS", "1"))
 RULE_STATE_EXPIRE_SECONDS = float(os.getenv("RULE_STATE_EXPIRE_SECONDS", "5"))
@@ -195,8 +196,10 @@ def _get_rule_engine() -> Optional[RuleEngine]:
     with _rule_engine_lock:
         if _rule_engine is None:
             _rule_engine = RuleEngine(
-                config_provider=ZoneServiceConfigProvider(ZONE_SERVICE_URL, ttl_seconds=RULE_CONFIG_TTL_SECONDS),
-                publisher=AiEventPublisher("{}/api/ai-events".format(ZONE_SERVICE_URL)),
+                config_provider=ZoneServiceConfigProvider(
+                    ZONE_SERVICE_URL, ttl_seconds=RULE_CONFIG_TTL_SECONDS, service_api_key=SERVICE_API_KEY
+                ),
+                publisher=AiEventPublisher("{}/api/ai-events".format(ZONE_SERVICE_URL), service_api_key=SERVICE_API_KEY),
                 settings=RuleEngineSettings(
                     heartbeat_seconds=RULE_EVENT_HEARTBEAT_SECONDS,
                     state_expire_seconds=RULE_STATE_EXPIRE_SECONDS,

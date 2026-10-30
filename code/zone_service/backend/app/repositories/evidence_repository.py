@@ -22,10 +22,16 @@ class EvidenceRepository:
         to_time: Optional[str] = None,
         zone_id: Optional[str] = None,
         object_type: Optional[str] = None,
+        allowed_camera_ids: Optional[List[str]] = None,
     ) -> List[sqlite3.Row]:
         bounded_limit = max(1, min(int(limit), 500))
         clauses = []
         params = []
+        if allowed_camera_ids is not None:
+            if not allowed_camera_ids:
+                return []
+            clauses.append("evidence.camera_id IN ({})".format(",".join("?" for _ in allowed_camera_ids)))
+            params.extend(allowed_camera_ids)
         if camera_id:
             clauses.append("evidence.camera_id = ?")
             params.append(camera_id)

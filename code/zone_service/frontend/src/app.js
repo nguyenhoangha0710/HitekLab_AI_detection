@@ -1,4 +1,5 @@
-import { api } from "./core/api.js";
+import { api, withToken } from "./core/api.js";
+import { ensureSignedIn } from "./core/auth.js";
 import { createEvidenceTab } from "./evidence/evidence_tab.js";
 
 const state = {
@@ -113,7 +114,7 @@ function renderLiveGrid() {
         <p>${escapeHtml(camera.id)} | live stream</p>
       </header>
       <div class="live-stage">
-        <img src="${camera.live_stream_url}" alt="${escapeHtml(camera.name)}">
+        <img src="${withToken(camera.live_stream_url)}" alt="${escapeHtml(camera.name)}">
       </div>
     `;
     els.cameraGrid.appendChild(card);
@@ -217,7 +218,7 @@ function loadReferenceImage(url) {
       resolve();
     };
     image.onerror = reject;
-    image.src = `${url}?t=${Date.now()}`;
+    image.src = withToken(`${url}?t=${Date.now()}`);
   });
 }
 
@@ -309,7 +310,7 @@ function connectLiveDetections(camera) {
   if (state.liveEventSources[camera.id]) {
     state.liveEventSources[camera.id].close();
   }
-  const events = new EventSource(camera.detection_stream_url);
+  const events = new EventSource(withToken(camera.detection_stream_url));
   state.liveEventSources[camera.id] = events;
   events.onmessage = (event) => {
     const result = JSON.parse(event.data);
@@ -362,7 +363,7 @@ function renderSyncedYoloFrame(cameraId, result) {
   };
   // YOLO tab khong doc MJPEG live. Moi bbox event bat buoc fetch dung frame_id
   // da duoc AI xu ly, giong sync viewer ben Edge Gateway.
-  image.src = `/api/cameras/${encodeURIComponent(cameraId)}/frames/${encodeURIComponent(result.frame_id)}.jpg?t=${Date.now()}`;
+  image.src = withToken(`/api/cameras/${encodeURIComponent(cameraId)}/frames/${encodeURIComponent(result.frame_id)}.jpg?t=${Date.now()}`);
 }
 
 function renderZoneList() {
@@ -912,7 +913,11 @@ els.zoneCanvas.addEventListener("pointermove", onCanvasPointerMove);
 els.zoneCanvas.addEventListener("pointerup", onCanvasPointerUp);
 els.zoneCanvas.addEventListener("pointerleave", onCanvasPointerUp);
 
-loadCameras().catch((error) => {
-  setStatus(error.message);
-});
+window.addEventListener("auth-required", () => setStatus("Can dang nhap lai (token het han hoac khong hop le)"));
+
+ensureSignedIn(document.getElementById("authBar"))
+  .then(() => loadCameras())
+  .catch((error) => {
+    setStatus(error.message);
+  });
 activateTab(initialTabFromPath());

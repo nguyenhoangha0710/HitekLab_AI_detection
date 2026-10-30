@@ -67,6 +67,9 @@ Copy-Item .env.example .env      # PowerShell
 | `ALERT_MODE` | `backend` / `local` | `backend` = gửi sự kiện sang Backend API, Backend tạo cảnh báo. `local` = chạy thử không cần Backend |
 | `BACKEND_BASE_URL` | `http://backend:5250` | Địa chỉ Backend nhìn từ zone-service. Đổi thành `http://host.docker.internal:5250` khi Backend chạy ngoài Docker |
 | `BACKEND_PROJECT`, `BACKEND_DLL` | đường dẫn `.csproj`, tên `.dll` | Project .NET cần build (xem `code/backend/README.md`) |
+| `AUTH_MODE` | `jwt` / `off` | `jwt` = phải đăng nhập, mỗi user chỉ thấy location được giao. `off` = không đăng nhập (dev) |
+| `AUTH_DEV_LOGIN` | `true` / `false` | Hiện nút **Đăng nhập demo** chọn user mẫu (khi Backend chưa có đăng nhập) |
+| `JWT_SECRET`, `SERVICE_API_KEY` | chuỗi bí mật | Khóa ký JWT (phải trùng với Backend), khóa cho service nội bộ. Đổi khi triển khai thật |
 | `*_PORT` | | Đổi nếu bị trùng cổng trên máy |
 
 ## 5. Chạy hệ thống
@@ -139,6 +142,14 @@ Backend ─► postgres:5432 (database hitek_ai_iot dùng chung)
 - Backend tắt hoặc báo lỗi thì `ai_event` vẫn được lưu (`alert_id` để trống), AI vẫn chạy bình thường.
 - Không có Backend mà vẫn muốn thấy cảnh báo: `ALERT_MODE=local`, khi đó Zone Service tự gom alert như trước.
 - Xem tình trạng kết nối: http://localhost:8010/api/integration/backend (số event đã gửi, số alertId nhận về, mã lỗi gần nhất).
+
+### Phân quyền theo location
+
+Khi `AUTH_MODE=jwt`, dashboard yêu cầu đăng nhập. Mỗi user chỉ thấy camera, zone, sự kiện, bằng chứng của location được giao (bảng `user_location_access`). Chi tiết mô hình và cách thống nhất với Backend: [docs/PHAN_QUYEN.md](docs/PHAN_QUYEN.md).
+
+- User demo: `owner@demo.local` (thấy hết), `kho.operator@demo.local` (chỉ Warehouse), `cong.viewer@demo.local` (chỉ Main Gate). Chọn ở ô **Đăng nhập demo** góc trên dashboard.
+- AI Service và Edge Gateway gọi Zone Service bằng header `X-Service-Key`, nên ba service phải cùng `SERVICE_API_KEY` (compose đã truyền sẵn). Nếu chạy AI trên máy host (chế độ C), đặt `$env:SERVICE_API_KEY` giống giá trị trong `.env` trước khi chạy `uvicorn`.
+- Muốn tắt đăng nhập khi dev: `AUTH_MODE=off`, rồi `docker compose up -d zone-service`.
 
 ### D. Chỉ xem video, không chạy AI
 
@@ -293,4 +304,7 @@ Khi cần broker MQTT: thêm service `mosquitto` vào `docker-compose.yml` (Back
 | `/api/integration/backend` báo `BACKEND_UNREACHABLE` hoặc `AUTH_FAILED` | Backend chưa chạy, `BACKEND_BASE_URL` không khớp cách chạy Backend, sai clientId/secret | Backend trong Docker thì `http://backend:5250`, ngoài Docker thì `http://host.docker.internal:5250`; kiểm tra `BACKEND_CLIENT_ID`/`BACKEND_CLIENT_SECRET`; chạy thử không Backend thì `ALERT_MODE=local` |
 | Báo `CAMERA_NOT_FOUND` / `AREA_NOT_FOUND` | Backend chưa có camera/khu vực trùng id với `config.docker.yaml` | Hai bên dùng chung `camera_id` và `location_id` (bảng `camera`, `location` trong Postgres) |
 | Báo `AI_EVENT_NOT_FOUND` | Backend đọc database khác với Zone Service | Backend và Zone Service phải dùng chung Postgres `hitek_ai_iot` |
+| Dashboard báo `Missing bearer token` hoặc liên tục đòi đăng nhập | `AUTH_MODE=jwt` nhưng chưa đăng nhập, hoặc token hết hạn | Đăng nhập lại bằng ô ở góc trên; tạm tắt bằng `AUTH_MODE=off` |
+| Đăng nhập được nhưng không thấy camera nào | User chưa được gán location | Thêm dòng vào `user_location_access`, hoặc dùng user `owner@demo.local` |
+| AI không tải được zone, log `RULE_CONFIG_REFRESH_FAILED ... 401` | AI Service thiếu hoặc sai `SERVICE_API_KEY` | Đặt cùng `SERVICE_API_KEY` cho ai-service, edge-gateway, zone-service |
 | Muốn làm lại từ đầu | | `docker compose down -v`, sau đó `docker compose up -d --build` |

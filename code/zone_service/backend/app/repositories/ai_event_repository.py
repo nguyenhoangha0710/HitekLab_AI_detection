@@ -12,18 +12,29 @@ class AiEventRepository:
         self.connection = connection
         self.database = database or _SqliteConnectionAdapter()
 
-    def list(self, camera_id: Optional[str] = None, limit: int = 100) -> List[sqlite3.Row]:
+    def list(
+        self,
+        camera_id: Optional[str] = None,
+        limit: int = 100,
+        allowed_camera_ids: Optional[List[str]] = None,
+    ) -> List[sqlite3.Row]:
+        """allowed_camera_ids: None = khong gioi han; list = chi cac camera user duoc phep xem."""
         bounded_limit = max(1, min(int(limit), 500))
+        clauses, params = [], []
         if camera_id:
-            return self.database.fetchall(
-                self.connection,
-                "SELECT * FROM ai_event WHERE camera_id = ? ORDER BY started_at DESC, created_at DESC LIMIT ?",
-                (camera_id, bounded_limit),
-            )
+            clauses.append("camera_id = ?")
+            params.append(camera_id)
+        if allowed_camera_ids is not None:
+            if not allowed_camera_ids:
+                return []
+            clauses.append("camera_id IN ({})".format(",".join("?" for _ in allowed_camera_ids)))
+            params.extend(allowed_camera_ids)
+        where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(bounded_limit)
         return self.database.fetchall(
             self.connection,
-            "SELECT * FROM ai_event ORDER BY started_at DESC, created_at DESC LIMIT ?",
-            (bounded_limit,),
+            "SELECT * FROM ai_event{} ORDER BY started_at DESC, created_at DESC LIMIT ?".format(where_sql),
+            tuple(params),
         )
 
     def get_by_source_event_id(self, source_event_id: str) -> Optional[sqlite3.Row]:

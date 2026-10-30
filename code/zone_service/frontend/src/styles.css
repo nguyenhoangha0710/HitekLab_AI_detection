@@ -539,3 +539,10 @@ select {
     grid-template-columns: 1fr;
   }
 }
+
+/* Dang nhap / user hien tai */
+.auth-bar { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+.auth-bar .auth-user { color: inherit; opacity: 0.85; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-bar .auth-login { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.auth-bar select, .auth-bar input { padding: 4px 6px; font-size: 13px; }
+.auth-bar button { padding: 4px 10px; font-size: 13px; cursor: pointer; }

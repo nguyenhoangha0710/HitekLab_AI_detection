@@ -37,6 +37,20 @@ class ZoneServiceSettings:
     backend_client_id: str = "ai-service"
     backend_client_secret: str = "ai-service-dev-secret"
     backend_timeout_seconds: float = 2.0
+    # Phan quyen: off (khong xac thuc, dev) | jwt (xac thuc bang JWT do Backend cap).
+    auth_mode: str = "off"
+    jwt_algorithm: str = "HS256"
+    jwt_secret: Optional[str] = None
+    jwt_public_key: Optional[str] = None
+    jwt_issuer: Optional[str] = None
+    jwt_audience: Optional[str] = None
+    jwt_user_claim: str = "sub"
+    jwt_tenant_claim: str = "tenant_id"
+    # Khoa cho service noi bo (AI Service, Edge Gateway) goi API qua header X-Service-Key.
+    service_api_key: Optional[str] = None
+    # Cho phep /api/auth/dev-login cap token cho user demo (chi dung khi chua noi dang nhap Backend).
+    auth_dev_login: bool = False
+    access_cache_seconds: float = 30.0
 
 
 def load_settings() -> ZoneServiceSettings:
@@ -75,4 +89,24 @@ def load_settings() -> ZoneServiceSettings:
         backend_client_id=os.getenv("BACKEND_CLIENT_ID", "ai-service"),
         backend_client_secret=os.getenv("BACKEND_CLIENT_SECRET", "ai-service-dev-secret"),
         backend_timeout_seconds=float(os.getenv("BACKEND_TIMEOUT_SECONDS", "2")),
+        auth_mode=os.getenv("AUTH_MODE", "off").strip().lower(),
+        jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
+        jwt_secret=os.getenv("JWT_SECRET") or None,
+        jwt_public_key=_read_optional_file(os.getenv("JWT_PUBLIC_KEY_FILE")) or os.getenv("JWT_PUBLIC_KEY") or None,
+        jwt_issuer=os.getenv("JWT_ISSUER") or None,
+        jwt_audience=os.getenv("JWT_AUDIENCE") or None,
+        jwt_user_claim=os.getenv("JWT_USER_CLAIM", "sub"),
+        jwt_tenant_claim=os.getenv("JWT_TENANT_CLAIM", "tenant_id"),
+        service_api_key=os.getenv("SERVICE_API_KEY") or None,
+        auth_dev_login=os.getenv("AUTH_DEV_LOGIN", "false").lower() in {"1", "true", "yes"},
+        access_cache_seconds=float(os.getenv("ACCESS_CACHE_SECONDS", "30")),
     )
+
+
+def _read_optional_file(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None

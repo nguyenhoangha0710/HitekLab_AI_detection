@@ -1,3 +1,4 @@
+import { withToken } from "../core/api.js";
 function datetimeLocalToIso(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toISOString();
@@ -76,7 +77,7 @@ export function createEvidenceTab({ els, state, api, cameraById, ruleLabel, esca
     const objectLabel = objectType ? `${objectType} ${event?.track_id || ""}`.trim() : "object";
     const sequence = item.sequence_number !== null && item.sequence_number !== undefined ? item.sequence_number : "-";
     const sourceCount = alert ? ` | sources ${alert.active_source_count}` : "";
-    const mediaUrl = `${escapeHtml(item.media_url)}?t=${Date.now()}`;
+    const mediaUrl = escapeHtml(withToken(`${item.media_url}?t=${Date.now()}`));
     const videoDuration = item.duration_seconds ? Number(item.duration_seconds).toFixed(1) : "-";
 
     return `

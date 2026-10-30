@@ -48,12 +48,14 @@ class ZoneServiceConfigProvider:
         retry_backoff_seconds: float = 5.0,
         fetch_json: Optional[Callable[[str], object]] = None,
         background: bool = True,
+        service_api_key: Optional[str] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.ttl_seconds = ttl_seconds
         self.timeout_seconds = timeout_seconds
         self.retry_backoff_seconds = retry_backoff_seconds
         self.background = background
+        self.service_api_key = service_api_key
         self._fetch_json = fetch_json or self._http_get_json
         self._lock = threading.Lock()
         self._cache: Dict[str, Tuple[float, List[ZoneConfig]]] = {}
@@ -138,6 +140,9 @@ class ZoneServiceConfigProvider:
         return zones
 
     def _http_get_json(self, url: str):
-        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+        headers = {"Accept": "application/json"}
+        if self.service_api_key:
+            headers["X-Service-Key"] = self.service_api_key
+        request = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))

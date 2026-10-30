@@ -106,6 +106,8 @@ services:
       YOLO_CLASSES: ${YOLO_CLASSES:-person,car,motorcycle}
       YOLO_CONFIDENCE: ${YOLO_CONFIDENCE:-0.35}
       TENANT_ID: ${TENANT_ID:-demo-tenant}
+      # Khoa service noi bo de upload clip bang chung khi Zone Service bat AUTH_MODE=jwt
+      SERVICE_API_KEY: ${SERVICE_API_KEY:-hitek-dev-service-key}
     ports:
       - "${EDGE_GATEWAY_PORT:-8002}:8002"
     healthcheck:
@@ -133,6 +135,7 @@ services:
       LOCAL_YOLO_CONFIDENCE: ${YOLO_CONFIDENCE:-0.35}
       LOCAL_YOLO_DEVICE: ${YOLO_DEVICE:-cpu}
       RULE_ENGINE_ENABLED: ${RULE_ENGINE_ENABLED:-true}
+      SERVICE_API_KEY: ${SERVICE_API_KEY:-hitek-dev-service-key}
       RULE_CONFIG_TTL_SECONDS: ${RULE_CONFIG_TTL_SECONDS:-10}
       RULE_EVENT_HEARTBEAT_SECONDS: ${RULE_EVENT_HEARTBEAT_SECONDS:-1}
       RULE_TIMEZONE_OFFSET_HOURS: ${RULE_TIMEZONE_OFFSET_HOURS:-7}
@@ -215,6 +218,16 @@ services:
       BACKEND_CLIENT_ID: ${BACKEND_CLIENT_ID:-ai-service}
       BACKEND_CLIENT_SECRET: ${BACKEND_CLIENT_SECRET:-ai-service-dev-secret}
       BACKEND_TIMEOUT_SECONDS: ${BACKEND_TIMEOUT_SECONDS:-2}
+      # Phan quyen theo tenant + location (xem HUONG_DAN_CHAY.md muc "Phan quyen").
+      AUTH_MODE: ${AUTH_MODE:-off}
+      AUTH_DEV_LOGIN: ${AUTH_DEV_LOGIN:-false}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_SECRET: ${JWT_SECRET:-hitek-dev-jwt-secret-change-me-32chars}
+      JWT_ISSUER: ${JWT_ISSUER:-}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-}
+      JWT_USER_CLAIM: ${JWT_USER_CLAIM:-sub}
+      JWT_TENANT_CLAIM: ${JWT_TENANT_CLAIM:-tenant_id}
+      SERVICE_API_KEY: ${SERVICE_API_KEY:-hitek-dev-service-key}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

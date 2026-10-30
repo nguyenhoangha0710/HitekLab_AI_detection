@@ -238,6 +238,7 @@ class Database:
         self._add_sqlite_column_if_missing(connection, "rule_config", "use_active_time", "INTEGER NOT NULL DEFAULT 0")
         self._add_sqlite_column_if_missing(connection, "rule_config", "active_start_time", "TEXT")
         self._add_sqlite_column_if_missing(connection, "rule_config", "active_end_time", "TEXT")
+        self._ensure_sqlite_access_tables(connection)
         self._ensure_sqlite_ai_event_table(connection)
         self._ensure_sqlite_alert_table(connection)
         self._ensure_sqlite_evidence_table(connection)
@@ -290,6 +291,42 @@ class Database:
         columns = {row["name"] for row in cursor.fetchall()}
         if column not in columns:
             connection.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, column, definition))
+
+    def _ensure_sqlite_access_tables(self, connection: sqlite3.Connection) -> None:
+        """Bang nguoi dung / phan quyen (giong Postgres) de dev va test bang SQLite."""
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS app_user (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                full_name TEXT NOT NULL,
+                password_hash TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS tenant_member (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (tenant_id, user_id)
+            );
+            CREATE TABLE IF NOT EXISTS user_location_access (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+                tenant_member_id TEXT NOT NULL REFERENCES tenant_member(id) ON DELETE CASCADE,
+                location_id TEXT NOT NULL REFERENCES location(id) ON DELETE CASCADE,
+                permission_level TEXT NOT NULL DEFAULT 'viewer',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (tenant_member_id, location_id)
+            );
+            """
+        )
 
     def _ensure_sqlite_ai_event_table(self, connection: sqlite3.Connection) -> None:
         connection.executescript(

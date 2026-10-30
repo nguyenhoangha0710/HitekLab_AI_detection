@@ -42,11 +42,13 @@ class AiEventPublisher:
         retry_delay_seconds: float = 0.5,
         post_json: Optional[Callable[[str, dict], None]] = None,
         start_thread: bool = True,
+        service_api_key: Optional[str] = None,
     ) -> None:
         self.endpoint_url = endpoint_url
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_delay_seconds = retry_delay_seconds
+        self.service_api_key = service_api_key
         self._post_json = post_json or self._http_post_json
         self._queue: "queue.Queue[dict]" = queue.Queue(maxsize=max_queue_size)
         self._stop_event = threading.Event()
@@ -118,12 +120,19 @@ class AiEventPublisher:
             error,
         )
 
+    def _headers(self) -> dict:
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.service_api_key:
+            # Zone Service bat AUTH_MODE=jwt -> service noi bo xac thuc bang khoa nay.
+            headers["X-Service-Key"] = self.service_api_key
+        return headers
+
     def _http_post_json(self, url: str, payload: dict) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         request = urllib.request.Request(
             url,
             data=body,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers=self._headers(),
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:

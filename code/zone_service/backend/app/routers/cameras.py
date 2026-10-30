@@ -1,11 +1,13 @@
 import uuid
 import time
 import urllib.request
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
+from ..access_control import AccessControl, Principal
+from ..auth import principal_dependency
 from ..config import ZoneServiceSettings
 from ..database import Database
 from ..models import CameraOut, ReferenceFrameOut
@@ -15,28 +17,33 @@ from ..serializers import camera_out, reference_frame_out, reference_frame_path
 from ..services.frame_capture_service import FrameCaptureService
 
 
-def create_camera_router(database: Database, settings: ZoneServiceSettings) -> APIRouter:
+def create_camera_router(
+    database: Database, settings: ZoneServiceSettings, access: Optional[AccessControl] = None
+) -> APIRouter:
     router = APIRouter(prefix="/api/cameras", tags=["cameras"])
+    access = access or AccessControl(database, settings)
+    current_principal = principal_dependency(access)
 
     @router.get("", response_model=List[CameraOut])
-    def list_cameras():
+    def list_cameras(principal: Principal = Depends(current_principal)):
         with database.session() as connection:
             rows = CameraRepository(connection, database).list_cameras()
+            allowed = access.allowed_camera_ids(principal, connection)
+            if allowed is not None:
+                allowed_set = set(allowed)
+                rows = [row for row in rows if str(row["id"]) in allowed_set]
             return [camera_out(row, settings.edge_gateway_base_url) for row in rows]
 
     @router.get("/{camera_id}", response_model=CameraOut)
-    def get_camera(camera_id: str):
+    def get_camera(camera_id: str, principal: Principal = Depends(current_principal)):
         with database.session() as connection:
-            row = CameraRepository(connection, database).get_camera(camera_id)
-            if row is None:
-                raise HTTPException(status_code=404, detail="Camera not found")
+            row = access.require_camera(principal, connection, camera_id)
             return camera_out(row, settings.edge_gateway_base_url)
 
     @router.get("/{camera_id}/latest.jpg")
-    def proxy_latest_frame(camera_id: str):
+    def proxy_latest_frame(camera_id: str, principal: Principal = Depends(current_principal)):
         with database.session() as connection:
-            if CameraRepository(connection, database).get_camera(camera_id) is None:
-                raise HTTPException(status_code=404, detail="Camera not found")
+            access.require_camera(principal, connection, camera_id)
 
         url = "{}/api/cameras/{}/latest.jpg".format(settings.edge_gateway_base_url, camera_id)
         try:
@@ -48,10 +55,9 @@ def create_camera_router(database: Database, settings: ZoneServiceSettings) -> A
         return StreamingResponse(iter([image_bytes]), media_type="image/jpeg")
 
     @router.get("/{camera_id}/frames/{frame_id}.jpg")
-    def proxy_frame_by_id(camera_id: str, frame_id: str):
+    def proxy_frame_by_id(camera_id: str, frame_id: str, principal: Principal = Depends(current_principal)):
         with database.session() as connection:
-            if CameraRepository(connection, database).get_camera(camera_id) is None:
-                raise HTTPException(status_code=404, detail="Camera not found")
+            access.require_camera(principal, connection, camera_id)
 
         url = "{}/api/cameras/{}/frames/{}.jpg".format(settings.edge_gateway_base_url, camera_id, frame_id)
         try:
@@ -63,10 +69,9 @@ def create_camera_router(database: Database, settings: ZoneServiceSettings) -> A
         return StreamingResponse(iter([image_bytes]), media_type="image/jpeg")
 
     @router.get("/{camera_id}/mjpeg")
-    def proxy_mjpeg(camera_id: str):
+    def proxy_mjpeg(camera_id: str, principal: Principal = Depends(current_principal)):
         with database.session() as connection:
-            if CameraRepository(connection, database).get_camera(camera_id) is None:
-                raise HTTPException(status_code=404, detail="Camera not found")
+            access.require_camera(principal, connection, camera_id)
 
         def stream() -> Iterable[bytes]:
             url = "{}/api/cameras/{}/mjpeg".format(settings.edge_gateway_base_url, camera_id)
@@ -85,12 +90,10 @@ def create_camera_router(database: Database, settings: ZoneServiceSettings) -> A
         return StreamingResponse(stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
     @router.post("/{camera_id}/reference-frame", response_model=ReferenceFrameOut, status_code=201)
-    def capture_reference_frame(camera_id: str):
+    def capture_reference_frame(camera_id: str, principal: Principal = Depends(current_principal)):
         reference_id = str(uuid.uuid4())
         with database.session() as connection:
-            camera = CameraRepository(connection, database).get_camera(camera_id)
-            if camera is None:
-                raise HTTPException(status_code=404, detail="Camera not found")
+            camera = access.require_camera(principal, connection, camera_id, "admin")
 
             try:
                 storage_key, width, height, captured_at = FrameCaptureService(
@@ -111,20 +114,18 @@ def create_camera_router(database: Database, settings: ZoneServiceSettings) -> A
             return reference_frame_out(row, "/api/reference-frames/{}".format(row["id"]))
 
     @router.get("/{camera_id}/reference-frame", response_model=ReferenceFrameOut)
-    def get_reference_frame(camera_id: str):
+    def get_reference_frame(camera_id: str, principal: Principal = Depends(current_principal)):
         with database.session() as connection:
-            if CameraRepository(connection, database).get_camera(camera_id) is None:
-                raise HTTPException(status_code=404, detail="Camera not found")
+            access.require_camera(principal, connection, camera_id)
             row = ReferenceFrameRepository(connection, database).get_latest(camera_id)
             if row is None:
                 raise HTTPException(status_code=404, detail="No reference frame captured yet")
             return reference_frame_out(row, "/api/reference-frames/{}".format(row["id"]))
 
     @router.get("/{camera_id}/detections/stream")
-    def proxy_detection_stream(camera_id: str):
+    def proxy_detection_stream(camera_id: str, principal: Principal = Depends(current_principal)):
         with database.session() as connection:
-            if CameraRepository(connection, database).get_camera(camera_id) is None:
-                raise HTTPException(status_code=404, detail="Camera not found")
+            access.require_camera(principal, connection, camera_id)
 
         def stream() -> Iterable[bytes]:
             url = "{}/api/cameras/{}/detections/stream".format(settings.edge_gateway_base_url, camera_id)
@@ -146,15 +147,17 @@ def create_camera_router(database: Database, settings: ZoneServiceSettings) -> A
     return router
 
 
-def create_reference_frame_router(database: Database, settings: ZoneServiceSettings) -> APIRouter:
+def create_reference_frame_router(
+    database: Database, settings: ZoneServiceSettings, access: Optional[AccessControl] = None
+) -> APIRouter:
     router = APIRouter(prefix="/api/reference-frames", tags=["reference-frames"])
+    access = access or AccessControl(database, settings)
+    current_principal = principal_dependency(access)
 
     @router.get("/{reference_id}")
-    def get_reference_image(reference_id: str):
+    def get_reference_image(reference_id: str, principal: Principal = Depends(current_principal)):
         with database.session() as connection:
-            row = database.fetchone(connection, "SELECT * FROM camera_reference_frame WHERE id = ?", (reference_id,))
-            if row is None:
-                raise HTTPException(status_code=404, detail="Reference frame not found")
+            row = access.require_via(principal, connection, "camera_reference_frame", reference_id)
             path = reference_frame_path(settings.reference_frame_dir, row["storage_key"])
             if path is None or not path.exists():
                 raise HTTPException(status_code=404, detail="Reference image file not found")

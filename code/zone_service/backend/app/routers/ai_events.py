@@ -2,9 +2,11 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 
+from ..access_control import AccessControl, Principal
+from ..auth import principal_dependency
 from ..config import ZoneServiceSettings
 from ..database import Database
 from ..models import AiEventCreate, AiEventOut, AlertOut, EvidenceOut
@@ -36,35 +38,52 @@ def create_ai_event_router(
     database: Database,
     settings: ZoneServiceSettings,
     backend_client: Optional[BackendEventClient] = None,
+    access: Optional[AccessControl] = None,
 ) -> APIRouter:
     router = APIRouter(tags=["ai-events"])
+    access = access or AccessControl(database, settings)
+    current_principal = principal_dependency(access)
     use_backend = settings.alert_mode == "backend"
     if use_backend and backend_client is None:
         backend_client = build_backend_client(settings)
 
     @router.get("/api/integration/backend")
-    def backend_integration_status():
+    def backend_integration_status(principal: Principal = Depends(current_principal)):
         """Trang thai ket noi Backend API: so event da gui, alertId nhan ve, loi gan nhat."""
+        access.require_tenant_admin(principal)
         if not use_backend:
             return {"alert_mode": settings.alert_mode, "enabled": False}
         return {"alert_mode": settings.alert_mode, "enabled": True, **backend_client.status()}
 
     @router.get("/api/ai-events", response_model=List[AiEventOut])
-    def list_ai_events(camera_id: Optional[str] = None, limit: int = Query(100, ge=1, le=500)):
+    def list_ai_events(
+        camera_id: Optional[str] = None,
+        limit: int = Query(100, ge=1, le=500),
+        principal: Principal = Depends(current_principal),
+    ):
         with database.session() as connection:
-            rows = AiEventRepository(connection, database).list(camera_id=camera_id, limit=limit)
+            allowed = access.allowed_camera_ids(principal, connection)
+            rows = AiEventRepository(connection, database).list(camera_id=camera_id, limit=limit, allowed_camera_ids=allowed)
             return [ai_event_out(row) for row in rows]
 
     @router.get("/api/alerts", response_model=List[AlertOut])
-    def list_alerts(camera_id: Optional[str] = None, limit: int = Query(100, ge=1, le=500)):
+    def list_alerts(
+        camera_id: Optional[str] = None,
+        limit: int = Query(100, ge=1, le=500),
+        principal: Principal = Depends(current_principal),
+    ):
         with database.session() as connection:
             repository = AlertRepository(connection, database)
             repository.resolve_stale(settings.alert_resolve_grace_seconds)
-            rows = repository.list(camera_id=camera_id, limit=limit)
+            allowed = access.allowed_camera_ids(principal, connection)
+            rows = repository.list(camera_id=camera_id, limit=limit, allowed_camera_ids=allowed)
             return [alert_out(row) for row in rows]
 
     @router.post("/api/ai-events", response_model=AiEventOut, status_code=201)
-    def upsert_ai_event(payload: AiEventCreate):
+    def upsert_ai_event(payload: AiEventCreate, principal: Principal = Depends(current_principal)):
+        with database.session() as connection:
+            # AI Service dung X-Service-Key; user thuong can quyen operator tai location cua camera.
+            access.require_camera(principal, connection, payload.camera_id, "operator")
         data = payload.dict()
         if use_backend:
             row = _upsert_via_backend(database, settings, backend_client, data)
@@ -83,9 +102,11 @@ def create_ai_event_router(
         zone_id: Optional[str] = None,
         object_type: Optional[str] = None,
         limit: int = Query(100, ge=1, le=500),
+        principal: Principal = Depends(current_principal),
     ):
         with database.session() as connection:
             rows = EvidenceRepository(connection, database).list(
+                allowed_camera_ids=access.allowed_camera_ids(principal, connection),
                 camera_id=camera_id,
                 event_type=event_type,
                 evidence_type=evidence_type,
@@ -99,17 +120,16 @@ def create_ai_event_router(
             return [evidence_out(row) for row in rows]
 
     @router.get("/api/ai-events/{ai_event_id}/evidence", response_model=List[EvidenceOut])
-    def list_event_evidence(ai_event_id: str):
+    def list_event_evidence(ai_event_id: str, principal: Principal = Depends(current_principal)):
         with database.session() as connection:
+            access.require_via(principal, connection, "ai_event", ai_event_id)
             rows = EvidenceRepository(connection, database).list_by_event(ai_event_id)
             return [evidence_out(row) for row in rows]
 
     @router.get("/api/evidence/{evidence_id}/media")
-    def get_evidence_media(evidence_id: str):
+    def get_evidence_media(evidence_id: str, principal: Principal = Depends(current_principal)):
         with database.session() as connection:
-            row = EvidenceRepository(connection, database).get(evidence_id)
-            if row is None:
-                raise HTTPException(status_code=404, detail="Evidence not found")
+            row = access.require_via(principal, connection, "evidence", evidence_id)
             storage = EvidenceStorageService(settings)
             if storage.is_minio_enabled():
                 try:
@@ -123,7 +143,11 @@ def create_ai_event_router(
             return FileResponse(str(path), media_type=row["mime_type"])
 
     @router.post("/api/evidence/video", response_model=EvidenceOut, status_code=201)
-    async def create_video_evidence(metadata: str = Form(...), file: UploadFile = File(...)):
+    async def create_video_evidence(
+        metadata: str = Form(...),
+        file: UploadFile = File(...),
+        principal: Principal = Depends(current_principal),
+    ):
         try:
             payload = json.loads(metadata)
         except json.JSONDecodeError:
@@ -133,6 +157,9 @@ def create_ai_event_router(
         missing = [field for field in required_fields if not payload.get(field)]
         if missing:
             raise HTTPException(status_code=400, detail="Missing fields: {}".format(", ".join(missing)))
+
+        with database.session() as connection:
+            access.require_camera(principal, connection, str(payload["camera_id"]), "operator")
 
         content = await file.read()
         if not content:

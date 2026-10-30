@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import subprocess
 import tempfile
 import threading
@@ -136,7 +137,12 @@ class VideoEvidenceRecorder:
             "frame_height": frames[0].image_height,
             "status": status,
         }
-        with httpx.Client(timeout=self.timeout_seconds) as client:
+        headers = {}
+        service_key = os.getenv("SERVICE_API_KEY")
+        if service_key:
+            # Zone Service bat AUTH_MODE=jwt -> upload clip bang khoa service noi bo.
+            headers["X-Service-Key"] = service_key
+        with httpx.Client(timeout=self.timeout_seconds, headers=headers) as client:
             with output_path.open("rb") as handle:
                 response = client.post(
                     request.upload_url,
