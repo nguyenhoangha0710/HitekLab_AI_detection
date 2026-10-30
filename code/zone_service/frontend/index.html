@@ -3,131 +3,40 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Hitek Zone Management</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <title>HITEK AI Vision</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap">
+    <link rel="stylesheet" href="/static/styles.css?v=console-2">
   </head>
   <body>
-    <div class="alert-banner" id="alertBanner" hidden></div>
-    <div class="shell">
+    <a class="skip-link" href="#view">Bỏ qua thanh điều hướng</a>
+    <div class="app">
       <aside class="sidebar">
         <div class="brand">
-          <h1>Zone Console</h1>
-          <p>Camera & Zone Management</p>
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-text"><strong>HITEK</strong> AI Vision</span>
         </div>
-        <div class="camera-list" id="cameraList"></div>
+        <nav class="nav" aria-label="Màn hình">
+          <a href="#/monitor" data-route="monitor">Giám sát</a>
+          <a href="#/zones" data-route="zones">Vùng và luật</a>
+          <a href="#/events" data-route="events">Sự kiện và bằng chứng</a>
+          <a href="#/system" data-route="system">Hệ thống</a>
+        </nav>
+        <section class="side-cameras" aria-label="Camera">
+          <h2>Camera</h2>
+          <ul data-camera-status></ul>
+        </section>
       </aside>
-
-      <section class="workspace">
-        <header class="toolbar">
-          <div class="tabs">
-            <button class="tab active" data-tab="live">Live Cameras</button>
-            <button class="tab" data-tab="yolo">YOLO Detection</button>
-            <button class="tab" data-tab="zone">Zone Editor</button>
-            <button class="tab" data-tab="evidence">Evidence</button>
-          </div>
-          <div class="auth-bar" id="authBar"></div>
-          <div class="status" id="statusText">Loading cameras...</div>
+      <div class="main">
+        <header class="topbar">
+          <div class="runtime" data-runtime title="Nơi AI Service đang chạy">AI: đang chờ kết quả</div>
+          <div class="topbar-right" data-user></div>
         </header>
-
-        <main class="content">
-          <section class="panel active" id="livePanel">
-            <div class="camera-grid" id="cameraGrid"></div>
-          </section>
-
-          <section class="panel" id="yoloPanel">
-            <div class="camera-grid" id="yoloGrid"></div>
-          </section>
-
-          <section class="panel" id="zonePanel">
-            <div class="editor-layout">
-              <section class="editor-main">
-                <div class="editor-head">
-                  <div>
-                    <h2 id="selectedCameraName">Select a camera</h2>
-                    <p id="selectedCameraMeta">No camera selected</p>
-                  </div>
-                  <button class="primary" id="captureButton">Capture Frame</button>
-                </div>
-
-                <div class="canvas-wrap">
-                  <canvas id="zoneCanvas"></canvas>
-                  <div class="empty-state" id="emptyState">Capture a reference frame to edit zones.</div>
-                </div>
-              </section>
-
-              <aside class="editor-side">
-                <label>
-                  Zone name
-                  <input id="zoneName" value="Restricted Zone">
-                </label>
-
-                <label>
-                  Zone type
-                  <select id="zoneType">
-                    <option value="restricted_area">Restricted Area</option>
-                    <option value="controlled_area">Controlled Area</option>
-                  </select>
-                </label>
-
-                <div class="actions">
-                  <button id="undoButton">Undo Point</button>
-                  <button id="clearButton">Clear</button>
-                  <button class="primary" id="saveZoneButton">Save Zone</button>
-                </div>
-
-                <div class="zone-list-head">
-                  <h3>Saved Zones</h3>
-                  <span id="pointCount">0 points</span>
-                </div>
-                <div class="zone-list" id="zoneList"></div>
-              </aside>
-            </div>
-          </section>
-
-          <section class="panel" id="evidencePanel">
-            <div class="evidence-head">
-              <label>
-                Camera
-                <select id="evidenceCameraFilter">
-                  <option value="">All cameras</option>
-                </select>
-              </label>
-              <label>
-                Event type
-                <select id="evidenceEventTypeFilter">
-                  <option value="">All events</option>
-                  <option value="person_intrusion">Person intrusion</option>
-                  <option value="vehicle_intrusion">Vehicle intrusion</option>
-                  <option value="loitering">Loitering</option>
-                  <option value="crowd_limit">Crowd limit</option>
-                  <option value="vehicle_stopping">Vehicle stopping</option>
-                </select>
-              </label>
-              <label>
-                Status
-                <select id="evidenceStatusFilter">
-                  <option value="">All statuses</option>
-                  <option value="completed">Completed</option>
-                  <option value="partial">Partial</option>
-                  <option value="failed">Failed</option>
-                </select>
-              </label>
-              <label>
-                From
-                <input id="evidenceFromFilter" type="datetime-local">
-              </label>
-              <label>
-                To
-                <input id="evidenceToFilter" type="datetime-local">
-              </label>
-              <button class="primary" id="refreshEvidenceButton">Refresh</button>
-            </div>
-            <div class="evidence-grid" id="evidenceGrid"></div>
-          </section>
-        </main>
-      </section>
+        <main id="view" class="view" tabindex="-1"></main>
+      </div>
     </div>
-
-    <script type="module" src="/static/app.js?v=frontend-module-evidence-v1"></script>
+    <div class="toasts" data-toasts role="status" aria-live="polite"></div>
+    <script type="module" src="/static/app.js?v=console-2"></script>
   </body>
 </html>

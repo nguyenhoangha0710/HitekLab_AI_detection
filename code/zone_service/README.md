@@ -46,6 +46,34 @@ Nếu Backend lưu alert ở bảng khác, Zone Service tạo dòng `alert` "mir
 `POST /api/ai-events`. Frontend chỉ hiển thị `result.rule_engine.violations` mà AI
 Service trả kèm trong luồng detection.
 
+## Giao diện (http://localhost:8010)
+
+Console cho nhóm AI và camera, viết bằng JavaScript thuần (không cần build). FastAPI phục vụ thẳng thư mục `frontend/`.
+
+| Màn hình | Dùng để |
+| --- | --- |
+| **Giám sát** (`#/monitor`) | Tường camera có lớp phủ AI: vùng, khung đối tượng, `#track_id`, mũi tên hướng đi, điểm chân. Có 2 cách hiển thị: **Khớp khung AI** (khung và hình luôn khớp, trễ theo AI) và **Video trực tiếp** (video mượt, khung vẽ theo kết quả mới nhất). Cột phải liệt kê vi phạm đang diễn ra; bấm vào để phóng to camera đó. Chân mỗi camera hiện số đối tượng, thời gian AI xử lý, độ trễ, AI chạy CPU hay GPU ở máy nào |
+| **Vùng và luật** (`#/zones`) | Chụp ảnh nền, vẽ đa giác vùng (vùng cấm / vùng hạn chế), bật/tắt hoặc xoá vùng, sửa luật bằng tiếng Việt (đối tượng, số giây, số người, độ tin cậy, khung giờ). Chỉ người có quyền Quản trị khu vực mới sửa được |
+| **Sự kiện và bằng chứng** (`#/events`) | Bảng sự kiện AI, lọc theo camera, loại sự kiện, thời gian, đã thành cảnh báo Backend hay chưa. Bấm một dòng để xem ảnh, clip và chi tiết (hướng đi, độ tin cậy, mã cảnh báo) |
+| **Hệ thống** (`#/system`) | AI đang chạy ở đâu, hiệu năng từng camera (khung/giây, thời gian AI xử lý, trễ đầu-cuối), trạng thái gửi sang Backend, quyền của tài khoản đang đăng nhập |
+
+Cấu trúc code:
+
+```text
+frontend/
+  index.html            khung trang: sidebar, topbar, vùng nội dung
+  src/app.js            khởi động: đăng nhập, tải camera, nối luồng kết quả AI, điều hướng theo #hash
+  src/styles.css        toàn bộ giao diện (biến màu ở :root)
+  src/core/api.js       gọi API, gắn token
+  src/core/auth.js      đăng nhập, user hiện tại
+  src/core/store.js     trạng thái chung + luồng SSE kết quả AI, danh sách vi phạm
+  src/core/overlay.js   vẽ vùng, khung đối tượng, hướng đi lên canvas
+  src/core/format.js    nhãn tiếng Việt, định dạng thời gian
+  src/views/            monitor.js, zones.js, events.js, system.js
+```
+
+Dashboard tổng quan, quản lý cảnh báo chính thức (từ Backend), quản lý cảm biến và người dùng thuộc frontend của nhóm Backend & IoT.
+
 Mở:
 
 ```text
