@@ -169,6 +169,8 @@ Khi `AUTH_MODE=jwt`, dashboard yêu cầu đăng nhập. Mỗi user chỉ thấy
 
 ### E. AI chạy trên server GPU của trường qua SSH (VS Code Remote-SSH)
 
+> **Ghi chú nhanh để chạy lại hằng ngày, kèm giải thích cơ chế:** [docs/CHAY_AI_GPU_TRUONG.md](docs/CHAY_AI_GPU_TRUONG.md). Cách đang dùng ổn định nhất: đường hầm mở bằng PowerShell `ssh -N -L 28003:localhost:18003 -R 18010:localhost:8010 khoa-gpu` thay cho `LocalForward`/`RemoteForward` của VS Code.
+
 Laptop chạy Docker (camera, Edge Gateway, Zone Service, database). Server GPU chỉ chạy AI Service bằng Python. Hai máy nói chuyện qua 2 đường hầm nằm trong kết nối SSH của VS Code:
 
 ```text
