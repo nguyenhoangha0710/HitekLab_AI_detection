@@ -546,3 +546,7 @@ select {
 .auth-bar .auth-login { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .auth-bar select, .auth-bar input { padding: 4px 6px; font-size: 13px; }
 .auth-bar button { padding: 4px 10px; font-size: 13px; cursor: pointer; }
+
+/* Noi AI dang chay: xanh = GPU, vang = CPU */
+.runtime-gpu { color: #4ade80; }
+.runtime-cpu { color: #fbbf24; }

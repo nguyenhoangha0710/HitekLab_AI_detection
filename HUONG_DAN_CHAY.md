@@ -74,6 +74,22 @@ Copy-Item .env.example .env      # PowerShell
 
 ## 5. Chạy hệ thống
 
+### Chọn nơi chạy AI bằng một lệnh (Windows)
+
+```powershell
+.\scripts\use-ai.ps1 status    # đang ở chế độ nào, AI chạy trên CPU hay GPU, ở máy nào
+.\scripts\use-ai.ps1 cpu       # chế độ A: AI trong Docker, chạy CPU (máy nào cũng chạy được, chậm)
+.\scripts\use-ai.ps1 gpu       # chế độ B: AI trong Docker, chạy GPU NVIDIA của máy này
+.\scripts\use-ai.ps1 remote    # chế độ E: AI chạy trên server GPU của trường (khoa-gpu) qua SSH
+.\scripts\use-ai.ps1 off       # chế độ D: không chạy AI, chỉ xem video
+```
+
+Script tự sửa các dòng liên quan trong `.env` (giữ nguyên profile `backend` nếu đang bật), chạy lại `docker compose up -d --build`, rồi in ra AI đang chạy ở đâu. PowerShell báo *running scripts is disabled* thì chạy trước: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+**Xem AI đang chạy ở đâu ngay trên dashboard:** dòng thông tin dưới tên camera ở tab YOLO Detection có đoạn `| GPU NVIDIA ... @ khoa-gpu` (chữ xanh) hoặc `| CPU @ docker-may-nay` (chữ vàng). Cũng xem được ở http://localhost:8003/health, mục `runtime`.
+
+Các mục A–E dưới đây là phần giải thích chi tiết từng chế độ, hoặc cách làm tay nếu không dùng script.
+
 Chọn **một** trong bốn chế độ. Ở mọi chế độ, `COMPOSE_PROFILES` quyết định AI Service và Backend có chạy trong Docker không.
 
 > **Khi chưa có code Backend trong `code/backend/`** (đang chờ nhóm Backend gộp code), bỏ `backend` khỏi `COMPOSE_PROFILES` (ví dụ `COMPOSE_PROFILES=ai`). Nếu không, lúc build sẽ báo `khong thay ... .csproj`. Lúc này Backend chạy riêng, nên đặt `BACKEND_BASE_URL=http://host.docker.internal:5250`.
@@ -150,6 +166,44 @@ Khi `AUTH_MODE=jwt`, dashboard yêu cầu đăng nhập. Mỗi user chỉ thấy
 - User demo: `owner@demo.local` (thấy hết), `kho.operator@demo.local` (chỉ Warehouse), `cong.viewer@demo.local` (chỉ Main Gate). Chọn ở ô **Đăng nhập demo** góc trên dashboard.
 - AI Service và Edge Gateway gọi Zone Service bằng header `X-Service-Key`, nên ba service phải cùng `SERVICE_API_KEY` (compose đã truyền sẵn). Nếu chạy AI trên máy host (chế độ C), đặt `$env:SERVICE_API_KEY` giống giá trị trong `.env` trước khi chạy `uvicorn`.
 - Muốn tắt đăng nhập khi dev: `AUTH_MODE=off`, rồi `docker compose up -d zone-service`.
+
+### E. AI chạy trên server GPU của trường qua SSH (VS Code Remote-SSH)
+
+Laptop chạy Docker (camera, Edge Gateway, Zone Service, database). Server GPU chỉ chạy AI Service bằng Python. Hai máy nói chuyện qua 2 đường hầm nằm trong kết nối SSH của VS Code:
+
+```text
+Laptop: edge-gateway ─► localhost:8003  ══ LocalForward ══►  server 127.0.0.1:18003 (AI Service, GPU)
+Laptop: zone-service :8010 ◄══ RemoteForward ══  server localhost:18010 ◄─ AI lấy zone, gửi sự kiện
+```
+
+**Làm một lần:**
+1. VS Code → `Ctrl+Shift+P` → *Remote-SSH: Open SSH Configuration File*, thêm vào khối `Host khoa-gpu`:
+   ```sshconfig
+       LocalForward 8003 localhost:18003
+       RemoteForward 18010 localhost:8010
+       ServerAliveInterval 30
+   ```
+   rồi ngắt kết nối và kết nối lại `khoa-gpu`.
+2. Trong terminal VS Code (đang ở server):
+   ```bash
+   git clone https://github.com/nguyenhoangha0710/HitekLab.git ~/HitekLab && cd ~/HitekLab
+   git checkout <nhanh-dang-dung>
+   conda create -n hitek python=3.11 -y && conda activate hitek
+   pip install -r code/ai_service/requirements-yolo.txt
+   python -c "import torch; print('CUDA:', torch.cuda.is_available())"   # phải là True
+   ```
+
+**Mỗi lần làm việc:**
+1. Mở VS Code, kết nối `khoa-gpu` (đường hầm tự mở).
+2. Trên server: `tmux new -s hitek-ai`, rồi `cd ~/HitekLab && git pull && bash scripts/run_ai_remote.sh`. Thoát tmux mà AI vẫn chạy: `Ctrl+B` rồi `D`. Script tự chọn GPU đang rảnh nhất và tự kiểm tra đường về Zone Service.
+3. Trên laptop: `.\scripts\use-ai.ps1 remote`.
+4. Xong việc: `tmux attach -t hitek-ai`, rồi `Ctrl+C` để trả GPU.
+
+Lưu ý:
+- `SERVICE_API_KEY` trên server (mặc định `hitek-dev-service-key`) phải giống trong `.env` của laptop.
+- VS Code mất kết nối thì AI ngừng nhận frame (video vẫn chạy); kết nối lại là chạy tiếp.
+- Docker không gọi được cổng 8003 (log edge-gateway báo `EDGE_AI_BBOX_WS_FAILED`): đổi thành `LocalForward 0.0.0.0:8003 localhost:18003`.
+- Server dùng chung: AI chỉ nghe ở `127.0.0.1`, tắt AI khi không dùng. Cổng 18003/18010 bị người khác chiếm thì đổi số (`AI_PORT=...` khi chạy script, `ZONE_SERVICE_URL=http://localhost:<cổng>` và sửa `RemoteForward` cho khớp).
 
 ### D. Chỉ xem video, không chạy AI
 

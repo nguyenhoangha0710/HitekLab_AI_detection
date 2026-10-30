@@ -1,5 +1,6 @@
 import base64
 import os
+import socket
 import threading
 import time
 from typing import Dict, List, Optional
@@ -40,8 +41,43 @@ MOTION_WINDOW_SECONDS = float(os.getenv("MOTION_WINDOW_SECONDS", "1.0"))
 MOTION_STATIONARY_SPEED_RATIO = float(os.getenv("MOTION_STATIONARY_SPEED_RATIO", "0.02"))
 
 
+# Nhan hien thi noi AI dang chay (vd "khoa-gpu", "laptop-ha"). Mac dinh = hostname.
+AI_HOST_LABEL = os.getenv("AI_HOST_LABEL") or socket.gethostname()
+
+
 def utc_iso() -> str:
     return to_iso_utc(utc_now())
+
+
+def detect_runtime(device: Optional[str] = DEFAULT_DEVICE) -> Dict:
+    """AI dang chay tren CPU hay GPU nao, o may nao. Gan vao /health va moi ket qua frame."""
+    info = {"host": AI_HOST_LABEL, "device": "cpu", "device_name": "CPU", "accelerator": "cpu", "cuda_available": False}
+    try:
+        import torch
+
+        info["torch"] = torch.__version__
+        info["cuda_available"] = bool(torch.cuda.is_available())
+        wants_cpu = str(device or "").lower() == "cpu"
+        if info["cuda_available"] and not wants_cpu:
+            index = int(device) if str(device or "").isdigit() else 0
+            if str(device or "").startswith("cuda:"):
+                index = int(str(device).split(":", 1)[1] or 0)
+            info["device"] = "cuda:{}".format(index)
+            info["device_name"] = torch.cuda.get_device_name(index)
+            info["accelerator"] = "gpu"
+    except Exception as exc:  # torch chua cai (vd chay test)
+        info["error"] = str(exc)
+    return info
+
+
+_runtime_info: Optional[Dict] = None
+
+
+def runtime_info() -> Dict:
+    global _runtime_info
+    if _runtime_info is None:
+        _runtime_info = detect_runtime()
+    return _runtime_info
 
 
 class LocalYoloBboxDetector:
@@ -215,6 +251,13 @@ def analyze_frame(payload: Dict) -> Dict:
     result = _get_detector().detect(payload)
     with _motion_lock:
         _motion.update(result)
+    runtime = runtime_info()
+    result["ai_runtime"] = {
+        "host": runtime["host"],
+        "accelerator": runtime["accelerator"],
+        "device": runtime["device"],
+        "device_name": runtime["device_name"],
+    }
     engine = _get_rule_engine()
     if engine is None:
         result["rule_engine"] = {"enabled": False, "violations": []}
@@ -246,6 +289,7 @@ def health():
         "model": DEFAULT_MODEL,
         "classes": DEFAULT_CLASSES.split(","),
         "device": DEFAULT_DEVICE or "auto",
+        "runtime": runtime_info(),
         "tracking": {
             "enabled": True,
             "method": "ultralytics_bytetrack",

@@ -333,7 +333,11 @@ function updateLiveMeta(cameraId, result) {
   const detections = result.detection_count ?? (result.detections || []).length;
   const inference = result.inference_ms !== undefined ? ` | ai ${result.inference_ms}ms` : "";
   const tracking = result.tracking?.enabled ? " | tracking on" : "";
-  meta.textContent = `${cameraId} | bbox seq ${result.sequence_number} | detections ${detections}${inference}${tracking}`;
+  const rt = result.ai_runtime;
+  const runtime = rt ? ` | ${rt.accelerator === "gpu" ? "GPU" : "CPU"} ${rt.accelerator === "gpu" ? rt.device_name : ""} @ ${rt.host}` : "";
+  meta.textContent = `${cameraId} | bbox seq ${result.sequence_number} | detections ${detections}${inference}${tracking}${runtime}`;
+  meta.classList.toggle("runtime-gpu", rt?.accelerator === "gpu");
+  meta.classList.toggle("runtime-cpu", rt?.accelerator === "cpu");
 }
 
 function renderSyncedYoloFrame(cameraId, result) {
