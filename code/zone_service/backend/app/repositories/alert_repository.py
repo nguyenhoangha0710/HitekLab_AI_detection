@@ -65,7 +65,12 @@ class AlertRepository:
             resolved_count += 1
         return resolved_count
 
-    def upsert_for_violation(self, payload: Dict[str, Any]) -> Optional[sqlite3.Row]:
+    def upsert_for_violation(self, payload: Dict[str, Any], is_new_source: bool = True) -> Optional[sqlite3.Row]:
+        """Gom AI Event vao Alert.
+
+        `is_new_source=False` khi AI Service gui heartbeat cho cung source_event_id:
+        chi cap nhat last_seen_at, khong tang active_source_count.
+        """
         camera = self.database.fetchone(
             self.connection,
             "SELECT tenant_id FROM camera WHERE id = ?",
@@ -83,7 +88,7 @@ class AlertRepository:
                 self.connection,
                 """
                 UPDATE alert
-                SET active_source_count = active_source_count + 1,
+                SET active_source_count = active_source_count + ?,
                     last_sequence_number = ?,
                     last_seen_at = ?,
                     payload = ?,
@@ -91,6 +96,7 @@ class AlertRepository:
                 WHERE id = ?
                 """,
                 (
+                    1 if is_new_source else 0,
                     payload.get("last_sequence_number"),
                     last_seen_at,
                     self._payload_param(self._alert_payload(payload)),

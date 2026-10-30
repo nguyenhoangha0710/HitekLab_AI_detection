@@ -237,6 +237,41 @@ class ZoneServiceTests(unittest.TestCase):
         self.assertEqual(2, second["active_source_count"])
         self.assertEqual(20, second["last_sequence_number"])
 
+    def test_alert_heartbeat_does_not_increase_source_count(self):
+        zone_payload = {
+            "name": "Heartbeat Area",
+            "zone_type": "controlled_area",
+            "polygon": {"points": [{"x": 1, "y": 2}, {"x": 3, "y": 2}, {"x": 2, "y": 5}]},
+            "frame_width": 640,
+            "frame_height": 360,
+            "enabled": True,
+        }
+        event = {
+            "source_event_id": "event-hb",
+            "camera_id": "camera-1",
+            "event_type": "loitering",
+            "object_type": "person",
+            "track_id": "person-1",
+            "first_sequence_number": 10,
+            "last_sequence_number": 10,
+            "started_at": "2026-09-15T00:00:00Z",
+            "last_seen_at": "2026-09-15T00:00:00Z",
+            "payload": {"frame_id": "frame-10"},
+        }
+        with self.database.session() as connection:
+            zone = ZoneRepository(connection).create("camera-1", zone_payload)
+            event["zone_id"] = zone["id"]
+            repository = AlertRepository(connection)
+            first = repository.upsert_for_violation(dict(event))
+            heartbeat = repository.upsert_for_violation(
+                dict(event, last_sequence_number=60, last_seen_at="2026-09-15T00:00:10Z"),
+                is_new_source=False,
+            )
+
+        self.assertEqual(first["id"], heartbeat["id"])
+        self.assertEqual(1, heartbeat["active_source_count"])
+        self.assertEqual(60, heartbeat["last_sequence_number"])
+
     def test_alert_lifecycle_resolves_stale_active_alert(self):
         with self.database.session() as connection:
             repository = AlertRepository(connection)

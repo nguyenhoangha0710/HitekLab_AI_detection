@@ -18,12 +18,19 @@ class LocalBboxServiceTests(unittest.TestCase):
         self.assertIn("MultiCameraByteTracker", source)
         self.assertIn('"inference_ms"', source)
 
-    def test_local_bbox_service_does_not_depend_on_modal(self):
+    def test_local_bbox_service_runs_rule_engine_after_tracking(self):
         source = (ROOT / "local_bbox_service.py").read_text(encoding="utf-8")
 
-        self.assertNotIn("import modal", source)
-        self.assertNotIn("@app.cls", source)
-        self.assertNotIn(".remote", source)
+        self.assertNotIn("modal", source.lower())
+        self.assertIn("def analyze_frame", source)
+        self.assertIn('result["rule_engine"] = engine.process(result)', source)
+        self.assertIn('@app.get("/rules/status")', source)
+        self.assertIn('@app.post("/rules/reload")', source)
+
+    def test_modal_branch_is_removed(self):
+        self.assertFalse((ROOT / "modal_ai").exists())
+        self.assertFalse((ROOT / "modal_yolo11_service.py").exists())
+        self.assertFalse((ROOT / "edge_gateway" / "transport" / "modal_bbox_sender.py").exists())
 
     def test_tracker_keeps_camera_state_separate(self):
         from local_ai.byte_tracker import MultiCameraByteTracker

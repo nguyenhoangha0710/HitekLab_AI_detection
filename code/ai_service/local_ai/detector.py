@@ -1,10 +1,7 @@
-import base64
-import os
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence
 
 import cv2
-import httpx
 import numpy as np
 
 
@@ -21,7 +18,11 @@ class Detection:
 
 COCO_CLASS_IDS: Dict[str, int] = {
     "person": 0,
+    "bicycle": 1,
     "car": 2,
+    "motorcycle": 3,
+    "bus": 5,
+    "truck": 7,
 }
 
 
@@ -111,70 +112,6 @@ class UltralyticsYoloObjectDetector:
         return detections
 
 
-class ModalYoloHttpDetector:
-    """Detector goi YOLOv11 endpoint tren Modal thay vi chay model trong container local."""
-
-    def __init__(
-        self,
-        endpoint_url: str,
-        confidence_threshold: float = 0.35,
-        yolo_classes: str = "person,car",
-        timeout_seconds: float = 30.0,
-    ) -> None:
-        if not endpoint_url:
-            raise RuntimeError("Modal detector requires MODAL_YOLO_ENDPOINT_URL or --modal-endpoint-url.")
-        self.endpoint_url = endpoint_url.rstrip("/")
-        self.confidence_threshold = confidence_threshold
-        self.yolo_classes = yolo_classes
-        self.timeout_seconds = timeout_seconds
-
-    def detect(self, frame: np.ndarray) -> List[Detection]:
-        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        if not ok:
-            raise RuntimeError("Cannot encode frame before sending to Modal YOLO endpoint.")
-        payload = {
-            "image_b64": base64.b64encode(encoded.tobytes()).decode("ascii"),
-            "classes": self.yolo_classes.split(","),
-            "confidence": self.confidence_threshold,
-            "return_image": False,
-        }
-        return self._post_payload(payload)
-
-    def detect_job(self, job) -> List[Detection]:
-        metadata = job.metadata
-        payload = {
-            "camera_id": metadata.camera_id,
-            "frame_id": metadata.frame_id,
-            "sequence_number": metadata.sequence_number,
-            "image_b64": base64.b64encode(job.image_bytes).decode("ascii"),
-            "classes": self.yolo_classes.split(","),
-            "confidence": self.confidence_threshold,
-            "return_image": False,
-        }
-        return self._post_payload(payload)
-
-    def _post_payload(self, payload: dict) -> List[Detection]:
-        response = httpx.post(self.endpoint_url, json=payload, timeout=self.timeout_seconds)
-        response.raise_for_status()
-        data = response.json()
-
-        detections: List[Detection] = []
-        for item in data.get("detections", []):
-            x1, y1, x2, y2 = [int(value) for value in item["bbox_xyxy"]]
-            detections.append(
-                Detection(
-                    class_id=int(item["class_id"]),
-                    class_name=str(item["class_name"]),
-                    confidence=float(item["confidence"]),
-                    x1=x1,
-                    y1=y1,
-                    x2=x2,
-                    y2=y2,
-                )
-            )
-        return detections
-
-
 def summarize_detections(detections: Sequence[Detection]) -> str:
     counts: Dict[str, int] = {}
     for detection in detections:
@@ -217,20 +154,11 @@ def build_person_detector(
     model_path: str = "yolo11n.pt",
     confidence_threshold: float = 0.35,
     device: Optional[str] = None,
-    yolo_classes: str = "person,car",
-    modal_endpoint_url: Optional[str] = None,
-    modal_timeout_seconds: float = 30.0,
+    yolo_classes: str = "person,car,motorcycle",
 ):
     normalized = mode.strip().lower()
     if normalized in ("debug", "none", "noop"):
         return NoopPersonDetector()
-    if normalized == "modal":
-        return ModalYoloHttpDetector(
-            endpoint_url=modal_endpoint_url or os.getenv("MODAL_YOLO_ENDPOINT_URL", ""),
-            confidence_threshold=confidence_threshold,
-            yolo_classes=yolo_classes,
-            timeout_seconds=modal_timeout_seconds,
-        )
     if normalized == "yolo":
         return UltralyticsYoloObjectDetector(
             model_path=model_path,

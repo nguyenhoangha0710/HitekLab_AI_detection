@@ -8,7 +8,7 @@ from common.models import FrameMetadata
 from common.time_utils import utc_now
 from edge_gateway.config import CameraIngestConfig
 from edge_gateway.live_viewer import LiveFrameHub, create_live_viewer_app
-from edge_gateway.transport.modal_bbox_sender import FanOutFrameSink, to_websocket_bbox_url
+from edge_gateway.transport.ai_bbox_sender import FanOutFrameSink, to_websocket_bbox_url
 
 
 class EdgeLiveViewerTests(unittest.TestCase):
@@ -109,16 +109,16 @@ class EdgeLiveViewerTests(unittest.TestCase):
 
     def test_to_websocket_bbox_url_accepts_detect_or_base_url(self):
         self.assertEqual(
-            "wss://example--api-dev.modal.run/ws/detect",
-            to_websocket_bbox_url("https://example--api-dev.modal.run"),
+            "wss://ai.example.com/ws/detect",
+            to_websocket_bbox_url("https://ai.example.com"),
         )
         self.assertEqual(
-            "wss://example--api-dev.modal.run/ws/detect",
-            to_websocket_bbox_url("https://example--api-dev.modal.run/detect"),
+            "wss://ai.example.com/ws/detect",
+            to_websocket_bbox_url("https://ai.example.com/detect"),
         )
         self.assertEqual(
-            "wss://example--api-dev.modal.run/ws/detect",
-            to_websocket_bbox_url("wss://example--api-dev.modal.run/ws/detect"),
+            "wss://ai.example.com/ws/detect",
+            to_websocket_bbox_url("wss://ai.example.com/ws/detect"),
         )
 
 

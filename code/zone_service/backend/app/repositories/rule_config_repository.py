@@ -37,7 +37,7 @@ class RuleConfigRepository:
                 },
                 {
                     "rule_type": "vehicle_intrusion",
-                    "object_type": "car",
+                    "object_type": "vehicle",
                     "duration_threshold": 15,
                     "people_threshold": None,
                     "confidence_threshold": 0.6,
@@ -70,7 +70,7 @@ class RuleConfigRepository:
                 },
                 {
                     "rule_type": "vehicle_stopping",
-                    "object_type": "car",
+                    "object_type": "vehicle",
                     "duration_threshold": 15,
                     "people_threshold": None,
                     "confidence_threshold": 0.6,

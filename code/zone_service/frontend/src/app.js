@@ -13,9 +13,7 @@ const state = {
   liveDetections: {},
   liveEventSources: {},
   yoloRenderedFrameIds: {},
-  ruleTrackStates: {},
-  crowdRuleStates: {},
-  violationStates: {},
+  lastEvidenceRefreshAt: 0,
   aiEvents: [],
   alerts: [],
   evidence: [],
@@ -24,11 +22,9 @@ const state = {
   draggingPointIndex: null,
 };
 
-const RULE_REATTACH_GRACE_MS = 3000;
-const RULE_STATE_EXPIRE_MS = 5000;
-const RULE_REATTACH_DISTANCE_PX = 80;
-const RULE_REATTACH_MIN_AREA_RATIO = 0.5;
-const RULE_REATTACH_MAX_AREA_RATIO = 2.0;
+// Rule Engine da chuyen sang AI Service (code/ai_service/rule_engine).
+// Frontend chi hien thi vi pham ma AI Service tra ve trong result.rule_engine.
+const EVIDENCE_REFRESH_INTERVAL_MS = 5000;
 
 const els = {
   cameraList: document.getElementById("cameraList"),
@@ -306,7 +302,7 @@ function connectLiveDetections(camera) {
   events.onmessage = (event) => {
     const result = JSON.parse(event.data);
     state.liveDetections[camera.id] = result;
-    evaluateRules(camera.id, result);
+    renderRuleViolations(camera.id, result);
     updateLiveMeta(camera.id, result);
     renderSyncedYoloFrame(camera.id, result);
   };
@@ -434,7 +430,9 @@ function ruleTemplate(rule) {
           Object
           <select data-rule-input="object_type">
             ${ruleObjectOption(rule.object_type, "person")}
+            ${ruleObjectOption(rule.object_type, "vehicle")}
             ${ruleObjectOption(rule.object_type, "car")}
+            ${ruleObjectOption(rule.object_type, "motorcycle")}
           </select>
         </label>
         <label>
@@ -620,296 +618,26 @@ function drawYoloOverlay(cameraId) {
   });
 }
 
-function evaluateRules(cameraId, result) {
-  if (!result || !Array.isArray(result.detections)) return;
+function renderRuleViolations(cameraId, result) {
+  const violations = result?.rule_engine?.violations || [];
   const now = Date.now();
-  const zones = (state.liveZones[cameraId] || []).filter((zone) => zone.enabled !== false);
-  const ruleMap = state.liveZoneRules[cameraId] || {};
-  const seenTrackKeys = new Set();
-  const crowdCounts = {};
-  const alerts = [];
-
-  result.detections.forEach((detection, index) => {
-    const originalPoint = detectionBottomCenterOriginal(detection);
-    const matchedZones = zones.filter((zone) => pointInPolygon(originalPoint, zone.polygon.points || []));
-    matchedZones.forEach((zone) => {
-      const rules = ruleMap[zone.id] || [];
-      rules.forEach((rule) => {
-        if (!ruleAppliesNow(rule, detection)) return;
-        if (rule.rule_type === "crowd_limit") {
-          const key = `${cameraId}|${zone.id}|${rule.id}`;
-          crowdCounts[key] = crowdCounts[key] || { zone, rule, tracks: new Set() };
-          crowdCounts[key].tracks.add(trackKey(detection, result, index));
-          return;
-        }
-
-        const threshold = rule.duration_threshold;
-        if (threshold === null || threshold === undefined) return;
-        const currentTrackKey = trackKey(detection, result, index);
-        const key = `${cameraId}|${zone.id}|${rule.id}|${currentTrackKey}`;
-        seenTrackKeys.add(key);
-        const existing =
-          state.ruleTrackStates[key] ||
-          reattachRuleState(cameraId, zone, rule, detection, result, index, currentTrackKey, seenTrackKeys, now) ||
-          {
-            firstSeenAt: now,
-            cameraId,
-            zoneId: zone.id,
-            ruleId: rule.id,
-            zoneName: zone.name,
-            ruleType: rule.rule_type,
-            objectType: detection.class_name,
-            trackId: currentTrackKey,
-            reattached: false,
-            firstSequenceNumber: result.sequence_number,
-            startedAt: new Date(now).toISOString(),
-          };
-        existing.cameraId = cameraId;
-        existing.zoneId = zone.id;
-        existing.ruleId = rule.id;
-        existing.zoneName = zone.name;
-        existing.ruleType = rule.rule_type;
-        existing.objectType = detection.class_name;
-        existing.trackId = currentTrackKey;
-        existing.lastFootpoint = originalPoint;
-        existing.lastBbox = detection.bbox_xyxy || null;
-        existing.lastSeenAt = now;
-        existing.lastSequenceNumber = result.sequence_number;
-        state.ruleTrackStates[key] = existing;
-
-        const elapsedSeconds = (now - existing.firstSeenAt) / 1000;
-        if (elapsedSeconds >= Number(threshold)) {
-          publishRuleViolationEvent(existing, zone, rule, detection, result, now);
-          alerts.push({
-            key,
-            cameraId,
-            zoneName: zone.name,
-            ruleType: rule.rule_type,
-            objectType: detection.class_name,
-            trackId: existing.trackId,
-            elapsedSeconds,
-            sequenceNumber: result.sequence_number,
-          });
-        }
-      });
-    });
-  });
-
-  Object.values(crowdCounts).forEach(({ zone, rule, tracks }) => {
-    const peopleThreshold = rule.people_threshold;
-    const durationThreshold = rule.duration_threshold;
-    if (peopleThreshold === null || peopleThreshold === undefined) return;
-    if (durationThreshold === null || durationThreshold === undefined) return;
-
-    const key = `${cameraId}|${zone.id}|${rule.id}`;
-    if (tracks.size >= Number(peopleThreshold)) {
-      const existing = state.crowdRuleStates[key] || { firstSeenAt: now };
-      existing.lastSeenAt = now;
-      existing.count = tracks.size;
-      existing.cameraId = cameraId;
-      existing.zoneId = zone.id;
-      existing.ruleId = rule.id;
-      existing.zoneName = zone.name;
-      existing.ruleType = rule.rule_type;
-      existing.objectType = "person";
-      existing.trackId = `${tracks.size} objects`;
-      existing.firstSequenceNumber = existing.firstSequenceNumber ?? result.sequence_number;
-      existing.startedAt = existing.startedAt || new Date(now).toISOString();
-      state.crowdRuleStates[key] = existing;
-      const elapsedSeconds = (now - existing.firstSeenAt) / 1000;
-      if (elapsedSeconds >= Number(durationThreshold)) {
-        publishRuleViolationEvent(existing, zone, rule, null, result, now);
-        alerts.push({
-          key,
-          cameraId,
-          zoneName: zone.name,
-          ruleType: rule.rule_type,
-          objectType: "person",
-          trackId: `${tracks.size} objects`,
-          elapsedSeconds,
-          sequenceNumber: result.sequence_number,
-        });
-      }
-    } else {
-      delete state.crowdRuleStates[key];
-    }
-  });
-
-  expireRuleStates(cameraId, seenTrackKeys, now);
+  const alerts = violations.map((violation) => ({
+    key: violation.key,
+    cameraId,
+    zoneName: violation.zone_name,
+    ruleType: violation.rule_type,
+    objectType: violation.object_type,
+    trackId: violation.track_id,
+    elapsedSeconds: Number(violation.elapsed_seconds || 0),
+    sequenceNumber: violation.sequence_number,
+  }));
   updateAlerts(alerts, now);
-}
 
-function publishRuleViolationEvent(ruleState, zone, rule, detection, result, now) {
-  if (ruleState.aiEventStatus === "pending" || ruleState.aiEventStatus === "created") return;
-
-  const sourceEventId = ruleState.sourceEventId || buildSourceEventId(ruleState, rule, result);
-  ruleState.sourceEventId = sourceEventId;
-  ruleState.aiEventStatus = "pending";
-
-  const payload = {
-    source_event_id: sourceEventId,
-    camera_id: ruleState.cameraId,
-    zone_id: zone.id,
-    rule_config_id: rule.id,
-    event_type: rule.rule_type,
-    object_type: ruleState.objectType || detection?.class_name || rule.object_type,
-    track_id: ruleState.trackId,
-    confidence: detection ? Number(detection.confidence || 0) : null,
-    lifecycle_status: "active",
-    first_sequence_number: ruleState.firstSequenceNumber,
-    last_sequence_number: result.sequence_number,
-    started_at: ruleState.startedAt || new Date(ruleState.firstSeenAt).toISOString(),
-    last_seen_at: new Date(now).toISOString(),
-    payload: {
-      camera_id: ruleState.cameraId,
-      frame_id: result.frame_id,
-      sequence_number: result.sequence_number,
-      zone_name: zone.name,
-      zone_type: zone.zone_type,
-      rule_type: rule.rule_type,
-      elapsed_seconds: Math.round((now - ruleState.firstSeenAt) / 1000),
-      detection: detection
-        ? {
-            class_name: detection.class_name,
-            confidence: detection.confidence,
-            bbox_xyxy: detection.bbox_xyxy,
-            track_id: detection.track_id,
-          }
-        : null,
-    },
-  };
-
-  api("/api/ai-events", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
-    .then((event) => {
-      ruleState.aiEventId = event.id;
-      ruleState.aiEventStatus = "created";
-      if (document.getElementById("evidencePanel")?.classList.contains("active")) {
-        evidenceTab.load().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
-      }
-    })
-    .catch((error) => {
-      ruleState.aiEventStatus = "failed";
-      ruleState.aiEventError = error.message;
-      setStatus(`AI event save failed: ${error.message}`);
-    });
-}
-
-function buildSourceEventId(ruleState, rule, result) {
-  const firstSequence = ruleState.firstSequenceNumber ?? result.sequence_number ?? "unknown";
-  return [ruleState.cameraId, ruleState.zoneId, rule.id, ruleState.trackId, firstSequence].join("|");
-}
-
-function detectionBottomCenterOriginal(detection) {
-  const box = detection.bbox_xyxy || [0, 0, 0, 0];
-  return {
-    x: (Number(box[0] || 0) + Number(box[2] || 0)) / 2,
-    y: Number(box[3] || 0),
-  };
-}
-
-function trackKey(detection, result, index) {
-  if (detection.track_id !== undefined && detection.track_id !== null) {
-    return `${detection.class_name || "object"}-${detection.track_id}`;
+  const evidenceActive = document.getElementById("evidencePanel")?.classList.contains("active");
+  if (alerts.length && evidenceActive && now - state.lastEvidenceRefreshAt > EVIDENCE_REFRESH_INTERVAL_MS) {
+    state.lastEvidenceRefreshAt = now;
+    evidenceTab.load().catch((error) => setStatus(`Load evidence failed: ${error.message}`));
   }
-  return `${detection.class_name || "object"}-${result.sequence_number}-${index}`;
-}
-
-function reattachRuleState(cameraId, zone, rule, detection, result, index, currentTrackKey, seenTrackKeys, now) {
-  const footpoint = detectionBottomCenterOriginal(detection);
-  const bbox = detection.bbox_xyxy || null;
-  let bestKey = null;
-  let bestState = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-
-  Object.entries(state.ruleTrackStates).forEach(([key, candidate]) => {
-    if (seenTrackKeys.has(key)) return;
-    if (candidate.cameraId !== cameraId) return;
-    if (candidate.zoneId !== zone.id) return;
-    if (candidate.ruleId !== rule.id) return;
-    if (candidate.objectType !== detection.class_name) return;
-    if (candidate.trackId === currentTrackKey) return;
-    if (!candidate.lastSeenAt || now - candidate.lastSeenAt > RULE_REATTACH_GRACE_MS) return;
-    if (!candidate.lastFootpoint || !candidate.lastBbox || !bbox) return;
-    if (!isAreaRatioCompatible(candidate.lastBbox, bbox)) return;
-
-    const distance = pointDistance(candidate.lastFootpoint, footpoint);
-    if (distance <= RULE_REATTACH_DISTANCE_PX && distance < bestDistance) {
-      bestKey = key;
-      bestState = candidate;
-      bestDistance = distance;
-    }
-  });
-
-  if (!bestState || !bestKey) return null;
-  delete state.ruleTrackStates[bestKey];
-  bestState.reattached = true;
-  bestState.reattachedFrom = bestState.trackId;
-  bestState.reattachedTo = currentTrackKey;
-  bestState.reattachedAtSequenceNumber = result.sequence_number;
-  return bestState;
-}
-
-function pointDistance(a, b) {
-  const dx = Number(a.x || 0) - Number(b.x || 0);
-  const dy = Number(a.y || 0) - Number(b.y || 0);
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-function isAreaRatioCompatible(previousBbox, currentBbox) {
-  const previousArea = bboxArea(previousBbox);
-  const currentArea = bboxArea(currentBbox);
-  if (previousArea <= 0 || currentArea <= 0) return false;
-  const ratio = currentArea / previousArea;
-  return ratio >= RULE_REATTACH_MIN_AREA_RATIO && ratio <= RULE_REATTACH_MAX_AREA_RATIO;
-}
-
-function bboxArea(bbox) {
-  return Math.max(0, Number(bbox[2] || 0) - Number(bbox[0] || 0)) * Math.max(0, Number(bbox[3] || 0) - Number(bbox[1] || 0));
-}
-
-function ruleAppliesNow(rule, detection) {
-  if (!rule || rule.enabled === false) return false;
-  if (rule.object_type && detection.class_name !== rule.object_type) return false;
-  if (rule.confidence_threshold !== null && rule.confidence_threshold !== undefined) {
-    if (Number(detection.confidence || 0) < Number(rule.confidence_threshold)) return false;
-  }
-  if (rule.use_active_time && !isInActiveWindow(rule.active_start_time, rule.active_end_time)) return false;
-  return true;
-}
-
-function isInActiveWindow(start, end) {
-  if (!start || !end) return false;
-  const now = new Date();
-  const current = now.getHours() * 60 + now.getMinutes();
-  const startMinutes = timeToMinutes(start);
-  const endMinutes = timeToMinutes(end);
-  if (startMinutes === endMinutes) return true;
-  if (startMinutes < endMinutes) return current >= startMinutes && current <= endMinutes;
-  return current >= startMinutes || current <= endMinutes;
-}
-
-function timeToMinutes(value) {
-  const [hour, minute] = String(value).split(":").map((part) => Number(part));
-  return hour * 60 + minute;
-}
-
-function expireRuleStates(cameraId, seenTrackKeys, now) {
-  Object.entries(state.ruleTrackStates).forEach(([key, value]) => {
-    if (value.cameraId !== cameraId) return;
-    if (seenTrackKeys.has(key)) return;
-    if (now - value.lastSeenAt > RULE_STATE_EXPIRE_MS) {
-      delete state.ruleTrackStates[key];
-    }
-  });
-  Object.entries(state.crowdRuleStates).forEach(([key, value]) => {
-    if (!key.startsWith(`${cameraId}|`)) return;
-    if (now - value.lastSeenAt > RULE_STATE_EXPIRE_MS) {
-      delete state.crowdRuleStates[key];
-    }
-  });
 }
 
 function updateAlerts(alerts, now) {

@@ -38,17 +38,23 @@ def create_ai_event_router(database: Database, settings: ZoneServiceSettings) ->
     def upsert_ai_event(payload: AiEventCreate):
         with database.session() as connection:
             data = payload.dict()
+            event_repository = AiEventRepository(connection, database)
+            # AI Service gui lai cung source_event_id dinh ky (heartbeat) khi vi pham
+            # con keo dai -> chi cap nhat last_seen, khong dem thanh nguon moi.
+            is_new_source = event_repository.get_by_source_event_id(data["source_event_id"]) is None
             alert_repository = AlertRepository(connection, database)
             alert_repository.resolve_stale(settings.alert_resolve_grace_seconds)
-            alert = alert_repository.upsert_for_violation(data)
+            alert = alert_repository.upsert_for_violation(data, is_new_source=is_new_source)
             if alert is None:
                 raise HTTPException(status_code=404, detail="Camera not found")
             data["alert_id"] = str(alert["id"])
-            row = AiEventRepository(connection, database).upsert(data)
+            row = event_repository.upsert(data)
             if row is None:
                 raise HTTPException(status_code=404, detail="Camera not found")
-            _capture_snapshot_evidence(connection, database, settings, row, data)
-            request_video_evidence(settings, row, data)
+            # Clip video chi xin khi vua chup snapshot moi (theo EVIDENCE_INTERVAL_SECONDS),
+            # tranh moi heartbeat lai ghi 1 clip.
+            if _capture_snapshot_evidence(connection, database, settings, row, data):
+                request_video_evidence(settings, row, data)
             return ai_event_out(row)
 
     @router.get("/api/evidence", response_model=List[EvidenceOut])
@@ -151,21 +157,22 @@ def create_ai_event_router(database: Database, settings: ZoneServiceSettings) ->
     return router
 
 
-def _capture_snapshot_evidence(connection, database: Database, settings: ZoneServiceSettings, event_row, payload: dict) -> None:
+def _capture_snapshot_evidence(connection, database: Database, settings: ZoneServiceSettings, event_row, payload: dict) -> bool:
+    """Chup snapshot cho alert neu dung policy. Tra ve True neu vua tao evidence moi."""
     event_payload = payload.get("payload") or {}
     frame_id = event_payload.get("frame_id")
     repository = EvidenceRepository(connection, database)
     if not _should_capture_alert_evidence(repository, payload.get("alert_id"), payload, settings.evidence_interval_seconds):
-        return
+        return False
     if repository.exists_for_event(str(event_row["id"]), frame_id):
-        return
+        return False
 
     try:
         storage_key, file_size = EvidenceCaptureService(settings).capture_snapshot(
             payload["camera_id"], str(event_row["id"]), frame_id
         )
     except Exception:
-        return
+        return False
 
     repository.create(
         {
@@ -181,3 +188,4 @@ def _capture_snapshot_evidence(connection, database: Database, settings: ZoneSer
             "captured_at": payload.get("last_seen_at") or payload["started_at"],
         }
     )
+    return True

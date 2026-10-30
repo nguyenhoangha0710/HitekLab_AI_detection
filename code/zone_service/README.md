@@ -31,37 +31,26 @@ Khi chuyển sang PostgreSQL, lớp cần thay chủ yếu là repository/databa
 
 ## Chạy service
 
-Chạy Edge Gateway trước để có live camera. Nếu chỉ cần video và zone overlay:
-
-```powershell
-cd D:\NguyenHoangHa_nam4\Internship\HitekLab
-$env:MODAL_TRANSPORT="viewer"
-docker compose up --build
-```
-
-Nếu muốn tab `Live Cameras` hiển thị thêm bbox YOLO, chạy AI bbox service trước rồi bật Gateway ở mode `viewer-ai`.
-
-Local YOLO:
+Chạy AI Service trên host trước (YOLO + ByteTrack + Rule Engine), sau đó bật hệ thống bằng Docker:
 
 ```powershell
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
 ..\..\.venv12\Scripts\Activate.ps1
 uvicorn local_bbox_service:app --host 0.0.0.0 --port 8003
-```
 
-Gateway gửi frame sang local YOLO và vẫn stream video cho viewer:
-
-```powershell
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab
-$env:MODAL_TRANSPORT="viewer-ai"
-$env:MODAL_BBOX_TRANSPORT="websocket"
-$env:MODAL_BBOX_WS_URL="ws://host.docker.internal:8003/ws/detect"
-$env:VIEWER_FPS="15"
-$env:AI_FPS="5"
 docker compose up --build
 ```
 
-Chạy Zone Service:
+Nếu chỉ cần video và zone overlay (không chạy AI): `$env:EDGE_MODE="viewer"` trước khi `docker compose up`.
+
+**Rule Engine không còn chạy trên trình duyệt.** AI Service lấy zone/rule qua
+`GET /api/cameras/{id}/zones` và `GET /api/zones/{id}/rules`, rồi gửi vi phạm về
+`POST /api/ai-events`. Frontend chỉ hiển thị `result.rule_engine.violations` mà AI
+Service trả kèm trong luồng detection.
+
+Chạy Zone Service ngoài Docker (dev):
+
 
 ```powershell
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab

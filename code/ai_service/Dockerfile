@@ -21,9 +21,7 @@ RUN if [ "$INSTALL_YOLO" = "true" ]; then \
 COPY common ./common
 COPY edge_gateway ./edge_gateway
 COPY local_ai ./local_ai
-COPY modal_ai ./modal_ai
-COPY modal_yolo11_service.py .
-COPY modal_bbox_service.py .
+COPY rule_engine ./rule_engine
 COPY local_bbox_service.py .
 COPY config.yaml .
 COPY config.docker.yaml .

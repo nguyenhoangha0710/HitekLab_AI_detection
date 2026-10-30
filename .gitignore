@@ -51,8 +51,6 @@ code/zone_service/data/*.db
 code/zone_service/data/*.db-*
 code/zone_service/data/reference_frames/
 
-# Modal/local cloud tool cache
-.modal/
 
 # Media files generated during experiments
 code/data/videos/*

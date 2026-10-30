@@ -1,10 +1,10 @@
 import unittest
-from unittest.mock import Mock, patch
+
 
 import numpy as np
 
 from local_ai.worker import AIWorker
-from local_ai.detector import Detection, ModalYoloHttpDetector, parse_coco_class_filter, summarize_detections
+from local_ai.detector import Detection, parse_coco_class_filter, summarize_detections
 from common.frame_job import FrameJob
 from local_ai.frame_queue import FrameQueueManager
 from common.image_codec import encode_jpeg
@@ -71,6 +71,7 @@ class AIWorkerDetectorTests(unittest.TestCase):
     def test_yolo_class_filter_accepts_person_and_car(self):
         self.assertEqual([0, 2], parse_coco_class_filter("person,car"))
         self.assertEqual([0, 2], parse_coco_class_filter("0,2"))
+        self.assertEqual([0, 2, 3], parse_coco_class_filter("person,car,motorcycle"))
 
     def test_detection_summary_counts_person_and_car(self):
         detections = [
@@ -80,34 +81,6 @@ class AIWorkerDetectorTests(unittest.TestCase):
         ]
 
         self.assertEqual("car 2 person 1", summarize_detections(detections))
-
-    def test_modal_detector_posts_frame_job_and_parses_detections(self):
-        detector = ModalYoloHttpDetector(
-            endpoint_url="https://example.modal.run/detect",
-            confidence_threshold=0.25,
-            yolo_classes="person,car",
-            timeout_seconds=5.0,
-        )
-        response = Mock()
-        response.json.return_value = {
-            "detections": [
-                {
-                    "class_id": 2,
-                    "class_name": "car",
-                    "confidence": 0.88,
-                    "bbox_xyxy": [1, 2, 30, 40],
-                }
-            ]
-        }
-
-        with patch("local_ai.detector.httpx.post", return_value=response) as post:
-            detections = detector.detect_job(self._job())
-
-        post.assert_called_once()
-        response.raise_for_status.assert_called_once()
-        self.assertEqual(1, len(detections))
-        self.assertEqual("car", detections[0].class_name)
-        self.assertEqual((1, 2, 30, 40), (detections[0].x1, detections[0].y1, detections[0].x2, detections[0].y2))
 
 
 if __name__ == "__main__":

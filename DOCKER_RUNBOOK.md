@@ -1,131 +1,64 @@
-# Docker Runbook: Edge Gateway To Modal AI Server
+# Docker Runbook
 
-Flow hien tai:
+Luồng hiện tại (không dùng Modal):
 
 ```text
-Camera video files
-  -> FFmpeg camera simulators
-  -> MediaMTX RTSP server
-  -> Edge Gateway / Video Ingest
-  -> Modal /ws/ingest
-  -> Modal Queue
-  -> Modal YOLOv11 GPU Worker
-  -> Modal Result Queue + Modal Dict latest result
-  -> Modal /ws/results va /viewer
+Video files ─► FFmpeg camera1/camera2 ─► MediaMTX (RTSP :8554)
+  ─► edge-gateway (:8002, nội bộ Docker)
+       ├─► zone-service (:8010) ─► Dashboard
+       └─► AI Service trên host (:8003): YOLOv11 + ByteTrack + Rule Engine
+              └─► POST zone-service /api/ai-events ─► alert + evidence (Postgres + MinIO)
 ```
 
-Flow nay chi dung cac primitive cua Modal cho queue/result.
+## Service
 
-## Local Docker Services
-
-| Service | Vai tro |
+| Service | Vai trò |
 | --- | --- |
-| `mediamtx` | RTSP server noi bo, expose port `8554`. |
-| `camera1` | FFmpeg loop `dummy_video_1.mp4` va publish len `rtsp://mediamtx:8554/camera1`. |
-| `camera2` | FFmpeg loop `dummy_video_2.mp4` va publish len `rtsp://mediamtx:8554/camera2`. |
-| `edge-gateway` | Doc RTSP, tao `FrameJob`, gui frame len Modal `/ws/ingest` bang WebSocket. |
+| `postgres` | Database chính, init từ `code/database/postgres/init`. |
+| `minio` | Lưu ảnh và clip bằng chứng (console :9001). |
+| `mediamtx` | RTSP server nội bộ, port `8554`. |
+| `camera1`, `camera2` | FFmpeg phát lặp video lên `rtsp://mediamtx:8554/cameraN`. |
+| `edge-gateway` | Đọc RTSP, phục vụ viewer, gửi frame sang AI Service qua `AI_SERVICE_WS_URL`. |
+| `zone-service` | Dashboard, cấu hình zone/rule, nhận AI Event, gom alert, lưu evidence. |
 
-## Run
+AI Service không nằm trong compose vì cần GPU của máy host.
 
-Terminal 1: chay Modal AI Server async.
-
-```powershell
-cd D:\NguyenHoangHa_nam4\Internship\HitekLab
-.\.venv12\Scripts\Activate.ps1
-modal serve code\ai_service\modal_yolo11_service.py
-```
-
-Copy URL base cua Modal, vi du:
-
-```text
-https://xxx--api-dev.modal.run
-```
-
-Terminal 2: chay Edge Gateway local.
+## Chạy
 
 ```powershell
+# Terminal 1: AI Service
+cd D:\NguyenHoangHa_nam4\Internship\HitekLab\code\ai_service
+..\..\.venv12\Scripts\Activate.ps1
+uvicorn local_bbox_service:app --host 0.0.0.0 --port 8003
+
+# Terminal 2: hệ thống
 cd D:\NguyenHoangHa_nam4\Internship\HitekLab
-$env:MODAL_INGEST_URL="https://xxx--api-dev.modal.run/ingest"
 docker compose up --build
 ```
 
-Docker mac dinh dung `MODAL_TRANSPORT=websocket`. Neu ban set URL dang
-`https://xxx--api-dev.modal.run/ingest`, Edge Gateway se tu chuyen thanh:
-
-```text
-wss://xxx--api-dev.modal.run/ingest
-```
-
-Mo viewer tren Modal:
-
-```text
-https://xxx--api-dev.modal.run/viewer
-```
-
-Kiem tra API:
+Dashboard: `http://localhost:8010`. Kiểm tra AI Service:
 
 ```powershell
-Invoke-RestMethod -Uri "https://xxx--api-dev.modal.run/health" | ConvertTo-Json -Depth 5
-Invoke-RestMethod -Uri "https://xxx--api-dev.modal.run/results" | ConvertTo-Json -Depth 8
+Invoke-RestMethod http://localhost:8003/health | ConvertTo-Json -Depth 6
+Invoke-RestMethod http://localhost:8003/rules/status | ConvertTo-Json -Depth 6
 ```
 
-Dung Edge local:
+Sau khi vẽ hoặc sửa zone/rule, AI Service tự tải lại sau tối đa 10 giây. Muốn áp dụng ngay:
 
 ```powershell
-docker compose down
+Invoke-RestMethod -Method Post http://localhost:8003/rules/reload
 ```
 
-## Important Config
+Dừng: `docker compose down`.
 
-Docker network khong dung `localhost` de cac container goi nhau. Vi vay:
+## Biến môi trường hay dùng
 
-```text
-RTSP camera1=rtsp://mediamtx:8554/camera1
-RTSP camera2=rtsp://mediamtx:8554/camera2
-MODAL_INGEST_URL=https://xxx--api-dev.modal.run/ingest
-MODAL_WS_URL=wss://xxx--api-dev.modal.run/ingest
-```
+| Biến | Mặc định | Ghi chú |
+| --- | --- | --- |
+| `EDGE_MODE` | `viewer-ai` | `viewer` = chỉ stream video. |
+| `AI_SERVICE_WS_URL` | `ws://host.docker.internal:8003/ws/detect` | Địa chỉ AI Service nhìn từ container. |
+| `AI_SERVICE_TRANSPORT` | `websocket` | Hoặc `http` (khi đó URL là `.../detect`). |
+| `VIEWER_FPS` / `AI_FPS` | `15` / `5` | FPS cho viewer và FPS gửi AI. |
 
-Config RTSP cho container nam o:
-
-```text
-code/ai_service/config.docker.yaml
-```
-
-## Modal Queue Flow
-
-```text
-WebSocket /ws/ingest
-  -> validate FramePacket
-  -> put payload vao Modal Queue FIFO chung
-  -> spawn ModalYoloQueueWorker theo chu ky frame
-
-ModalYoloQueueWorker
-  -> load YOLOv11 mot lan bang @modal.enter
-  -> get frame tu Modal Queue
-  -> detect person/car tren GPU T4
-  -> ve bbox len frame
-  -> luu latest result vao Modal Dict
-  -> put result vao Modal Result Queue
-
-WebSocket /ws/results
-  -> gui latest snapshot tu Modal Dict khi viewer vua ket noi
-  -> doc Modal Result Queue
-  -> push frame da ve bbox xuong browser
-```
-
-## Realtime Defaults
-
-Vi Edge gui frame qua internet len Modal, khong nen day FPS cao nhu local GPU.
-Nen bat dau voi:
-
-```yaml
-target_fps: 2-5
-frame_width: 640
-frame_height: 360
-jpeg_quality: 70-80
-confidence: 0.25-0.35
-```
-
-Neu `target_fps` cao hon toc do Modal worker xu ly, Modal Queue se backlog va
-viewer se lag.
+Trong Docker network không dùng `localhost` để các container gọi nhau: camera là
+`rtsp://mediamtx:8554/cameraN` (xem `code/ai_service/config.docker.yaml`).

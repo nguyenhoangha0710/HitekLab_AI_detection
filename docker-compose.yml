@@ -112,20 +112,21 @@ services:
         condition: service_started
       camera2:
         condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      MODAL_INGEST_URL: ${MODAL_INGEST_URL:-}
-      MODAL_WS_URL: ${MODAL_WS_URL:-}
-      MODAL_BBOX_URL: ${MODAL_BBOX_URL:-}
-      MODAL_BBOX_WS_URL: ${MODAL_BBOX_WS_URL:-ws://host.docker.internal:8003/ws/detect}
-      MODAL_BBOX_TRANSPORT: ${MODAL_BBOX_TRANSPORT:-websocket}
-      MODAL_TRANSPORT: ${MODAL_TRANSPORT:-viewer-ai}
-      MODAL_INGEST_TIMEOUT_SECONDS: "10"
+      # viewer: chi stream video | viewer-ai: stream video + gui frame sang AI Service
+      EDGE_MODE: ${EDGE_MODE:-viewer-ai}
+      # AI Service (local_bbox_service.py) chay tren may host de dung GPU, port 8003
+      AI_SERVICE_WS_URL: ${AI_SERVICE_WS_URL:-ws://host.docker.internal:8003/ws/detect}
+      AI_SERVICE_TRANSPORT: ${AI_SERVICE_TRANSPORT:-websocket}
+      AI_SERVICE_TIMEOUT_SECONDS: "10"
       EDGE_AI_QUEUE_SIZE: ${EDGE_AI_QUEUE_SIZE:-4}
       EDGE_VIEWER_FPS: ${VIEWER_FPS:-15}
       EDGE_AI_FPS: ${AI_FPS:-5}
       EDGE_VIEWER_HOST: "0.0.0.0"
       EDGE_VIEWER_PORT: "8002"
-      YOLO_CLASSES: "person,car"
+      YOLO_CLASSES: "person,car,motorcycle"
       YOLO_CONFIDENCE: "0.35"
       TENANT_ID: ${TENANT_ID:-demo-tenant}
     expose:

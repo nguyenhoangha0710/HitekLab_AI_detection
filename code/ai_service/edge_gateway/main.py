@@ -9,32 +9,32 @@ from typing import List
 from .config import load_video_ingest_config
 from .evidence_recorder import VideoEvidenceRecorder
 from .live_viewer import DetectionHub, LiveFrameHub, start_live_viewer_server
-from .transport.modal_bbox_sender import AsyncModalBboxSender, FanOutFrameSink, WebSocketModalBboxSender
-from .transport.modal_http_sender import ModalFrameSender
-from .transport.modal_websocket_sender import ModalWebSocketFrameSender
+from .transport.ai_bbox_sender import FanOutFrameSink, HttpAiBboxSender, WebSocketAiBboxSender
 from .video_ingest import VideoIngestWorker
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Edge Gateway: read RTSP and send frames to Modal AI Server or local viewer.")
+    parser = argparse.ArgumentParser(description="Edge Gateway: read RTSP, serve live viewer and send sampled frames to the local AI Service.")
     parser.add_argument("--config", default="config.yaml", help="Path to edge/video ingest YAML config.")
-    parser.add_argument("--modal-ingest-url", default=os.getenv("MODAL_INGEST_URL", ""), help="Modal /ingest endpoint URL.")
-    parser.add_argument("--modal-ws-url", default=os.getenv("MODAL_WS_URL", ""), help="Modal /ws/ingest endpoint URL.")
-    parser.add_argument("--modal-bbox-url", default=os.getenv("MODAL_BBOX_URL", ""), help="Modal /detect bbox endpoint URL.")
-    parser.add_argument("--modal-bbox-ws-url", default=os.getenv("MODAL_BBOX_WS_URL", ""), help="Modal /ws/detect bbox endpoint URL.")
     parser.add_argument(
-        "--modal-bbox-transport",
+        "--mode",
+        choices=["viewer", "viewer-ai"],
+        default=os.getenv("EDGE_MODE", "viewer-ai"),
+        help="viewer: chi stream video. viewer-ai: stream video va gui frame sang AI Service.",
+    )
+    parser.add_argument(
+        "--ai-url",
+        default=os.getenv("AI_SERVICE_WS_URL") or os.getenv("AI_SERVICE_URL", "ws://localhost:8003/ws/detect"),
+        help="AI Service endpoint: ws(s)://host:8003/ws/detect hoac http(s)://host:8003/detect.",
+    )
+    parser.add_argument(
+        "--ai-transport",
         choices=["websocket", "http"],
-        default=os.getenv("MODAL_BBOX_TRANSPORT", "websocket"),
+        default=os.getenv("AI_SERVICE_TRANSPORT", "websocket"),
     )
-    parser.add_argument(
-        "--transport",
-        choices=["websocket", "http", "viewer", "viewer-ai"],
-        default=os.getenv("MODAL_TRANSPORT", "websocket"),
-    )
-    parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("MODAL_INGEST_TIMEOUT_SECONDS", "10")))
+    parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("AI_SERVICE_TIMEOUT_SECONDS", "10")))
     parser.add_argument("--confidence", type=float, default=float(os.getenv("YOLO_CONFIDENCE", "0.35")))
-    parser.add_argument("--yolo-classes", default=os.getenv("YOLO_CLASSES", "person,car"))
+    parser.add_argument("--yolo-classes", default=os.getenv("YOLO_CLASSES", "person,car,motorcycle"))
     parser.add_argument("--tenant-id", default=os.getenv("TENANT_ID"))
     parser.add_argument(
         "--viewer-fps",
@@ -59,63 +59,35 @@ def main() -> None:
             ingest_config,
             cameras=[replace(camera, target_fps=args.viewer_fps) for camera in ingest_config.cameras],
         )
-    viewer_thread = None
-    evidence_recorder = None
-    if args.transport in ("viewer", "viewer-ai"):
-        live_hub = LiveFrameHub(ingest_config.cameras)
-        detection_hub = DetectionHub()
-        evidence_recorder = VideoEvidenceRecorder(live_hub.frames_between)
-        viewer_thread = start_live_viewer_server(
-            live_hub,
-            ingest_config.cameras,
-            host=args.viewer_host,
-            port=args.viewer_port,
+    live_hub = LiveFrameHub(ingest_config.cameras)
+    detection_hub = DetectionHub()
+    evidence_recorder = VideoEvidenceRecorder(live_hub.frames_between)
+    viewer_thread = start_live_viewer_server(
+        live_hub,
+        ingest_config.cameras,
+        host=args.viewer_host,
+        port=args.viewer_port,
+        detection_hub=detection_hub,
+        viewer_mode="sync" if args.mode == "viewer-ai" else "live",
+        evidence_recorder=evidence_recorder,
+    )
+    if args.mode == "viewer-ai":
+        sender_kwargs = dict(
             detection_hub=detection_hub,
-            viewer_mode="sync" if args.transport == "viewer-ai" else "live",
-            evidence_recorder=evidence_recorder,
+            timeout_seconds=args.timeout_seconds,
+            confidence_threshold=args.confidence,
+            yolo_classes=args.yolo_classes,
+            tenant_id=args.tenant_id,
+            max_queue_size=args.ai_queue_size,
+            target_fps=args.ai_fps,
         )
-        if args.transport == "viewer-ai":
-            if args.modal_bbox_transport == "websocket":
-                ai_sender = WebSocketModalBboxSender(
-                    websocket_url=args.modal_bbox_ws_url or args.modal_bbox_url,
-                    detection_hub=detection_hub,
-                    timeout_seconds=args.timeout_seconds,
-                    confidence_threshold=args.confidence,
-                    yolo_classes=args.yolo_classes,
-                    tenant_id=args.tenant_id,
-                    max_queue_size=args.ai_queue_size,
-                    target_fps=args.ai_fps,
-                )
-            else:
-                ai_sender = AsyncModalBboxSender(
-                    detect_url=args.modal_bbox_url,
-                    detection_hub=detection_hub,
-                    timeout_seconds=args.timeout_seconds,
-                    confidence_threshold=args.confidence,
-                    yolo_classes=args.yolo_classes,
-                    tenant_id=args.tenant_id,
-                    max_queue_size=args.ai_queue_size,
-                    target_fps=args.ai_fps,
-                )
-            sender = FanOutFrameSink(live_hub, ai_sender)
+        if args.ai_transport == "websocket":
+            ai_sender = WebSocketAiBboxSender(websocket_url=args.ai_url, **sender_kwargs)
         else:
-            sender = live_hub
-    elif args.transport == "websocket":
-        sender = ModalWebSocketFrameSender(
-            websocket_url=args.modal_ws_url or args.modal_ingest_url,
-            timeout_seconds=args.timeout_seconds,
-            confidence_threshold=args.confidence,
-            yolo_classes=args.yolo_classes,
-            tenant_id=args.tenant_id,
-        )
+            ai_sender = HttpAiBboxSender(detect_url=args.ai_url, **sender_kwargs)
+        sender = FanOutFrameSink(live_hub, ai_sender)
     else:
-        sender = ModalFrameSender(
-            ingest_url=args.modal_ingest_url,
-            timeout_seconds=args.timeout_seconds,
-            confidence_threshold=args.confidence,
-            yolo_classes=args.yolo_classes,
-            tenant_id=args.tenant_id,
-        )
+        sender = live_hub
     stop_event = threading.Event()
 
     def stop_handler(signum, frame) -> None:
@@ -152,10 +124,8 @@ def main() -> None:
         for thread in threads:
             thread.join(timeout=2.0)
         sender.close()
-        if evidence_recorder is not None:
-            evidence_recorder.close()
-        if viewer_thread is not None:
-            viewer_thread.join(timeout=1.0)
+        evidence_recorder.close()
+        viewer_thread.join(timeout=1.0)
         for worker in workers:
             logging.info("Edge gateway stopped camera=%s sent_frames=%s", worker.camera.camera_id, worker.enqueued_frames)
 

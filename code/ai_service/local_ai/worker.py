@@ -39,14 +39,13 @@ class AIWorker:
         LOGGER.info("AI worker %s started for shard %s", self.worker_id, self.shard_id)
         self._recover_processing()
         while not self.stop_event.is_set():
-            # Claim camera/frame từ broker hiện tại. Với rollback này, local API dùng
-            # memory broker; Modal cloud dùng Modal Queue trong modal_yolo11_service.py.
+            # Claim camera/frame từ broker hiện tại (memory broker cho local debug API).
             jobs = self._claim_next_batch()
             if not jobs:
                 continue
 
             for index, job in enumerate(jobs, start=1):
-                # Detector co the chay local YOLO hoac goi Modal endpoint.
+                # Detector chay local YOLO (hoac Noop khi debug).
                 if hasattr(self.detector, "detect_job"):
                     detections = self.detector.detect_job(job)
                 else:

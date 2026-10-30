@@ -39,7 +39,7 @@ class _BboxSenderStats:
 
 def to_websocket_bbox_url(url: str) -> str:
     if not url:
-        raise ValueError("Modal bbox WebSocket URL is required.")
+        raise ValueError("AI Service WebSocket URL is required.")
 
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
@@ -48,7 +48,7 @@ def to_websocket_bbox_url(url: str) -> str:
     elif scheme == "http":
         scheme = "ws"
     elif scheme not in ("ws", "wss"):
-        raise ValueError("Unsupported Modal URL scheme: {}".format(parsed.scheme))
+        raise ValueError("Unsupported AI Service URL scheme: {}".format(parsed.scheme))
 
     path = parsed.path.rstrip("/")
     if path.endswith("/ws/detect"):
@@ -59,10 +59,10 @@ def to_websocket_bbox_url(url: str) -> str:
     return urlunparse((scheme, parsed.netloc, path, "", "", ""))
 
 
-class AsyncModalBboxSender:
-    """Gui sampled frame len Modal bbox service ma khong lam cham live viewer.
+class HttpAiBboxSender:
+    """Gui sampled frame len AI Service (HTTP /detect) ma khong lam cham live viewer.
 
-    Queue nay nam o Edge Gateway, chi de cach ly network/Modal latency khoi luong
+    Queue nay nam o Edge Gateway, chi de cach ly network/AI latency khoi luong
     MJPEG local. Khi queue day, frame cu bi drop de AI bam sat live hon.
     """
 
@@ -72,7 +72,7 @@ class AsyncModalBboxSender:
         detection_hub: DetectionHub,
         timeout_seconds: float = 10.0,
         confidence_threshold: float = 0.35,
-        yolo_classes: str = "person,car",
+        yolo_classes: str = "person,car,motorcycle",
         tenant_id: Optional[str] = None,
         max_queue_size: int = 4,
         target_fps: float = 5.0,
@@ -80,7 +80,7 @@ class AsyncModalBboxSender:
         start_thread: bool = True,
     ) -> None:
         if not detect_url:
-            raise ValueError("Modal bbox detect URL is required.")
+            raise ValueError("AI Service detect URL is required.")
         self.detect_url = detect_url
         self.detection_hub = detection_hub
         self.timeout_seconds = timeout_seconds
@@ -99,7 +99,7 @@ class AsyncModalBboxSender:
             timeout=httpx.Timeout(timeout_seconds),
             limits=httpx.Limits(max_keepalive_connections=4, max_connections=4),
         )
-        self._thread = threading.Thread(target=self._send_loop, name="edge-modal-bbox-sender", daemon=True)
+        self._thread = threading.Thread(target=self._send_loop, name="edge-ai-bbox-sender", daemon=True)
         if start_thread:
             self._thread.start()
 
@@ -163,7 +163,7 @@ class AsyncModalBboxSender:
                 self._mark_accepted(job)
                 if metadata.sequence_number % 30 == 0:
                     LOGGER.info(
-                        "EDGE_MODAL_BBOX_ACCEPTED camera=%s seq=%s detections=%s inference_ms=%s",
+                        "EDGE_AI_BBOX_ACCEPTED camera=%s seq=%s detections=%s inference_ms=%s",
                         metadata.camera_id,
                         metadata.sequence_number,
                         result.get("detection_count"),
@@ -172,7 +172,7 @@ class AsyncModalBboxSender:
             except Exception as exc:
                 self._mark_failed(job)
                 LOGGER.warning(
-                    "EDGE_MODAL_BBOX_FAILED camera=%s frame=%s seq=%s error=%s",
+                    "EDGE_AI_BBOX_FAILED camera=%s frame=%s seq=%s error=%s",
                     metadata.camera_id,
                     metadata.frame_id,
                     metadata.sequence_number,
@@ -250,8 +250,8 @@ class AsyncModalBboxSender:
             )
 
 
-class WebSocketModalBboxSender(AsyncModalBboxSender):
-    """Gui frame len Modal bbox service qua WebSocket va nhan bbox tren cung ket noi."""
+class WebSocketAiBboxSender(HttpAiBboxSender):
+    """Gui frame len AI Service qua WebSocket /ws/detect va nhan bbox tren cung ket noi."""
 
     def __init__(
         self,
@@ -259,7 +259,7 @@ class WebSocketModalBboxSender(AsyncModalBboxSender):
         detection_hub: DetectionHub,
         timeout_seconds: float = 10.0,
         confidence_threshold: float = 0.35,
-        yolo_classes: str = "person,car",
+        yolo_classes: str = "person,car,motorcycle",
         tenant_id: Optional[str] = None,
         max_queue_size: int = 4,
         target_fps: float = 5.0,
@@ -282,7 +282,7 @@ class WebSocketModalBboxSender(AsyncModalBboxSender):
         self._client = None
         self._connector = connector
         self._connection = None
-        self._thread = threading.Thread(target=self._send_loop, name="edge-modal-bbox-ws-sender", daemon=True)
+        self._thread = threading.Thread(target=self._send_loop, name="edge-ai-bbox-ws-sender", daemon=True)
         self._thread.start()
 
     def close(self) -> None:
@@ -296,7 +296,7 @@ class WebSocketModalBboxSender(AsyncModalBboxSender):
 
     def _connect(self):
         if self._connection is None:
-            LOGGER.info("Connecting Modal bbox WebSocket %s", self.detect_url)
+            LOGGER.info("Connecting AI Service WebSocket %s", self.detect_url)
             self._connection = self._connector(
                 self.detect_url,
                 open_timeout=self.timeout_seconds,
@@ -319,16 +319,16 @@ class WebSocketModalBboxSender(AsyncModalBboxSender):
                 raw_response = connection.recv(timeout=self.timeout_seconds)
                 message = json.loads(raw_response)
                 if message.get("type") == "error":
-                    raise RuntimeError(message.get("detail", "Modal bbox WebSocket error"))
+                    raise RuntimeError(message.get("detail", "AI Service WebSocket error"))
                 result = message.get("result")
                 if not isinstance(result, dict):
-                    raise RuntimeError("Modal bbox WebSocket returned invalid result.")
+                    raise RuntimeError("AI Service WebSocket returned invalid result.")
 
                 self.detection_hub.update(result)
                 self._mark_accepted(job)
                 if metadata.sequence_number % 30 == 0:
                     LOGGER.info(
-                        "EDGE_MODAL_BBOX_WS_ACCEPTED camera=%s seq=%s detections=%s inference_ms=%s",
+                        "EDGE_AI_BBOX_WS_ACCEPTED camera=%s seq=%s detections=%s inference_ms=%s",
                         metadata.camera_id,
                         metadata.sequence_number,
                         result.get("detection_count"),
@@ -338,7 +338,7 @@ class WebSocketModalBboxSender(AsyncModalBboxSender):
                 self._connection = None
                 self._mark_failed(job)
                 LOGGER.warning(
-                    "EDGE_MODAL_BBOX_WS_FAILED camera=%s frame=%s seq=%s error=%s",
+                    "EDGE_AI_BBOX_WS_FAILED camera=%s frame=%s seq=%s error=%s",
                     metadata.camera_id,
                     metadata.frame_id,
                     metadata.sequence_number,
@@ -350,7 +350,7 @@ class FanOutFrameSink:
     """Fan-out cung mot FrameJob sang AI bbox va viewer local.
 
     AI duoc enqueue truoc de lay dung frame can detect; viewer van duoc cap nhat
-    ngay sau do va khong cho Modal xu ly xong.
+    ngay sau do va khong cho AI xu ly xong.
     """
 
     def __init__(self, primary, secondary=None) -> None:
@@ -363,7 +363,7 @@ class FanOutFrameSink:
                 self.secondary.enqueue(job)
             except Exception as exc:
                 LOGGER.warning(
-                    "EDGE_MODAL_BBOX_ENQUEUE_FAILED camera=%s seq=%s error=%s",
+                    "EDGE_AI_BBOX_ENQUEUE_FAILED camera=%s seq=%s error=%s",
                     job.metadata.camera_id,
                     job.metadata.sequence_number,
                     exc,

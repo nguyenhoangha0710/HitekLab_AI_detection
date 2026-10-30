@@ -6,16 +6,17 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 
+from common.time_utils import to_iso_utc, utc_now
 from local_ai.byte_tracker import MultiCameraByteTracker
 from local_ai.detector import COCO_CLASS_IDS, parse_coco_class_filter
-from modal_ai.time_utils import utc_iso
+from rule_engine import AiEventPublisher, RuleEngine, RuleEngineSettings, ZoneServiceConfigProvider
 
 
-APP_NAME = "hitek-local-yolo11-bbox-ai-service"
+APP_NAME = "hitek-ai-service"
 DEFAULT_MODEL = os.getenv("LOCAL_YOLO_MODEL", "yolo11n.pt")
 DEFAULT_CONFIDENCE = float(os.getenv("LOCAL_YOLO_CONFIDENCE", "0.35"))
 DEFAULT_IMAGE_SIZE = int(os.getenv("LOCAL_YOLO_IMAGE_SIZE", "640"))
-DEFAULT_CLASSES = os.getenv("LOCAL_YOLO_CLASSES", "person,car")
+DEFAULT_CLASSES = os.getenv("LOCAL_YOLO_CLASSES", "person,car,motorcycle")
 DEFAULT_DEVICE = os.getenv("LOCAL_YOLO_DEVICE") or None
 DEFAULT_TRACK_IOU = float(os.getenv("LOCAL_TRACK_IOU", "0.3"))
 DEFAULT_TRACK_BUFFER_FRAMES = int(os.getenv("LOCAL_TRACK_BUFFER_FRAMES", "45"))
@@ -24,9 +25,21 @@ DEFAULT_TRACK_LOW_THRESH = float(os.getenv("LOCAL_TRACK_LOW_THRESH", "0.1"))
 DEFAULT_NEW_TRACK_THRESH = float(os.getenv("LOCAL_NEW_TRACK_THRESH", "0.5"))
 DEFAULT_TRACK_MATCH_THRESH = float(os.getenv("LOCAL_TRACK_MATCH_THRESH", "0.8"))
 
+# Rule Engine: lay zone/rule tu Zone Service va gui AI Event nguoc lai Zone Service.
+RULE_ENGINE_ENABLED = os.getenv("RULE_ENGINE_ENABLED", "true").lower() in {"1", "true", "yes"}
+ZONE_SERVICE_URL = os.getenv("ZONE_SERVICE_URL", "http://localhost:8010").rstrip("/")
+RULE_CONFIG_TTL_SECONDS = float(os.getenv("RULE_CONFIG_TTL_SECONDS", "10"))
+RULE_EVENT_HEARTBEAT_SECONDS = float(os.getenv("RULE_EVENT_HEARTBEAT_SECONDS", "10"))
+RULE_STATE_EXPIRE_SECONDS = float(os.getenv("RULE_STATE_EXPIRE_SECONDS", "5"))
+RULE_TIMEZONE_OFFSET_HOURS = float(os.getenv("RULE_TIMEZONE_OFFSET_HOURS", "7"))
+
+
+def utc_iso() -> str:
+    return to_iso_utc(utc_now())
+
 
 class LocalYoloBboxDetector:
-    """YOLOv11 bbox-only detector chay local, khong phu thuoc Modal."""
+    """YOLOv11 detector + ByteTrack chay local (GPU neu co)."""
 
     def __init__(
         self,
@@ -39,7 +52,7 @@ class LocalYoloBboxDetector:
 
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
-        self.class_ids = class_ids or [COCO_CLASS_IDS["person"], COCO_CLASS_IDS["car"]]
+        self.class_ids = class_ids or [COCO_CLASS_IDS["person"], COCO_CLASS_IDS["car"], COCO_CLASS_IDS["motorcycle"]]
         self.device = device
         self.model = YOLO(model_path)
         self.tracker = MultiCameraByteTracker(
@@ -116,8 +129,6 @@ class LocalYoloBboxDetector:
             "edge_sent_at": payload.get("edge_sent_at"),
             "local_received_at": payload.get("local_received_at") or utc_iso(),
             "local_processed_at": utc_iso(),
-            "modal_received_at": payload.get("local_received_at") or utc_iso(),
-            "modal_processed_at": utc_iso(),
             "model": self.model_path,
             "classes": class_ids,
             "detections": detections,
@@ -136,14 +147,16 @@ class LocalYoloBboxDetector:
         }
 
 
-app = FastAPI(title="Hitek Local YOLOv11 BBox AI Service")
+app = FastAPI(title="Hitek AI Service (YOLOv11 + ByteTrack + Rule Engine)")
 _detector: Optional[LocalYoloBboxDetector] = None
 _detector_lock = threading.Lock()
+_rule_engine: Optional[RuleEngine] = None
+_rule_engine_lock = threading.Lock()
 
 
 def _parse_class_ids(value) -> List[int]:
     if value is None:
-        return [COCO_CLASS_IDS["person"], COCO_CLASS_IDS["car"]]
+        return parse_coco_class_filter(DEFAULT_CLASSES)
     if isinstance(value, str):
         return parse_coco_class_filter(value)
     return parse_coco_class_filter(",".join(str(item) for item in value))
@@ -162,6 +175,38 @@ def _get_detector() -> LocalYoloBboxDetector:
                 device=DEFAULT_DEVICE,
             )
     return _detector
+
+
+def _get_rule_engine() -> Optional[RuleEngine]:
+    global _rule_engine
+    if not RULE_ENGINE_ENABLED:
+        return None
+    if _rule_engine is not None:
+        return _rule_engine
+    with _rule_engine_lock:
+        if _rule_engine is None:
+            _rule_engine = RuleEngine(
+                config_provider=ZoneServiceConfigProvider(ZONE_SERVICE_URL, ttl_seconds=RULE_CONFIG_TTL_SECONDS),
+                publisher=AiEventPublisher("{}/api/ai-events".format(ZONE_SERVICE_URL)),
+                settings=RuleEngineSettings(
+                    heartbeat_seconds=RULE_EVENT_HEARTBEAT_SECONDS,
+                    state_expire_seconds=RULE_STATE_EXPIRE_SECONDS,
+                    timezone_offset_hours=RULE_TIMEZONE_OFFSET_HOURS,
+                    model_name=os.path.splitext(os.path.basename(DEFAULT_MODEL))[0],
+                ),
+            )
+    return _rule_engine
+
+
+def analyze_frame(payload: Dict) -> Dict:
+    """YOLO -> ByteTrack -> Rule Engine cho 1 frame."""
+    result = _get_detector().detect(payload)
+    engine = _get_rule_engine()
+    if engine is None:
+        result["rule_engine"] = {"enabled": False, "violations": []}
+    else:
+        result["rule_engine"] = engine.process(result)
+    return result
 
 
 def normalize_payload(payload: Dict) -> Dict:
@@ -183,7 +228,7 @@ def health():
     return {
         "status": "ok",
         "service": APP_NAME,
-        "mode": "local-bbox-only",
+        "mode": "local-yolo-bytetrack-rules",
         "model": DEFAULT_MODEL,
         "classes": DEFAULT_CLASSES.split(","),
         "device": DEFAULT_DEVICE or "auto",
@@ -197,15 +242,51 @@ def health():
             "new_track_thresh": DEFAULT_NEW_TRACK_THRESH,
             "match_thresh": DEFAULT_TRACK_MATCH_THRESH,
         },
+        "rule_engine": _rule_engine_status(),
         "timestamp": utc_iso(),
     }
+
+
+def _rule_engine_status() -> Dict:
+    if not RULE_ENGINE_ENABLED:
+        return {"enabled": False}
+    engine = _get_rule_engine()
+    return {
+        "enabled": True,
+        "zone_service_url": ZONE_SERVICE_URL,
+        "heartbeat_seconds": RULE_EVENT_HEARTBEAT_SECONDS,
+        "engine": engine.snapshot(),
+        "config": engine.config_provider.stats(),
+        "publisher": engine.publisher.stats(),
+    }
+
+
+@app.get("/rules/status")
+def rules_status():
+    return _rule_engine_status()
+
+
+@app.post("/rules/reload")
+def rules_reload(camera_id: Optional[str] = None):
+    """Xoa cache zone/rule de AI Service tai lai ngay (goi sau khi sua zone)."""
+    engine = _get_rule_engine()
+    if engine is None:
+        raise HTTPException(status_code=409, detail="Rule engine is disabled.")
+    engine.config_provider.invalidate(camera_id)
+    return {"status": "ok", "camera_id": camera_id, "timestamp": utc_iso()}
+
+
+@app.on_event("shutdown")
+def _shutdown_rule_engine():
+    if _rule_engine is not None:
+        _rule_engine.publisher.close()
 
 
 @app.post("/detect")
 def detect(payload: Dict):
     try:
         payload = normalize_payload(payload)
-        return _get_detector().detect(payload)
+        return analyze_frame(payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -219,7 +300,7 @@ async def detect_websocket(websocket: WebSocket):
             payload = await websocket.receive_json()
             try:
                 payload = normalize_payload(payload)
-                result = _get_detector().detect(payload)
+                result = analyze_frame(payload)
             except Exception as exc:
                 await websocket.send_json(
                     {
