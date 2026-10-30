@@ -34,6 +34,13 @@ Khi chuyển sang PostgreSQL, lớp cần thay chủ yếu là repository/databa
 Cách chạy toàn hệ thống và chạy riêng Zone Service để dev: xem
 [HUONG_DAN_CHAY.md](../../HUONG_DAN_CHAY.md) (mục 5 và mục 9).
 
+**Cảnh báo do Backend API tạo (`ALERT_MODE=backend`, mặc định).** `POST /api/ai-events`
+ghi `ai_event`, commit, rồi gọi Backend `POST /api/v1/events` (kèm token lấy từ
+`/api/v1/auth/token`) và gán `alertId` trả về vào `ai_event.alert_id` / `evidence.alert_id`.
+Nếu Backend lưu alert ở bảng khác, Zone Service tạo dòng `alert` "mirror"
+(`dedup_key = backend:<id>`) chỉ để giữ khoá ngoại và hiển thị tab Evidence.
+`ALERT_MODE=local` giữ cách tự gom alert cũ. Trạng thái: `GET /api/integration/backend`.
+
 **Rule Engine không còn chạy trên trình duyệt.** AI Service lấy zone/rule qua
 `GET /api/cameras/{id}/zones` và `GET /api/zones/{id}/rules`, rồi gửi vi phạm về
 `POST /api/ai-events`. Frontend chỉ hiển thị `result.rule_engine.violations` mà AI

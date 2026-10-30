@@ -95,6 +95,23 @@ class EvidenceRepository:
             (alert_id,),
         )
 
+    def latest_for_event(self, ai_event_id: Optional[str]) -> Optional[sqlite3.Row]:
+        if not ai_event_id:
+            return None
+        return self.database.fetchone(
+            self.connection,
+            "SELECT * FROM evidence WHERE ai_event_id = ? ORDER BY captured_at DESC, created_at DESC LIMIT 1",
+            (ai_event_id,),
+        )
+
+    def attach_alert(self, ai_event_id: str, alert_id: str) -> None:
+        """Gan alert_id cho bang chung da chup truoc khi Backend tra alertId."""
+        self.database.execute(
+            self.connection,
+            "UPDATE evidence SET alert_id = ? WHERE ai_event_id = ? AND alert_id IS NULL",
+            (alert_id, ai_event_id),
+        )
+
     def exists_for_event(self, ai_event_id: str, frame_id: Optional[str]) -> bool:
         if frame_id:
             row = self.database.fetchone(

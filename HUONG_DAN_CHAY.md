@@ -63,6 +63,8 @@ Copy-Item .env.example .env      # PowerShell
 | `CAMERA1_VIDEO`, `CAMERA2_VIDEO` | tên file | File trong `code/data/videos/` |
 | `YOLO_DEVICE` | `cpu` / `0` | Thiết bị chạy YOLO |
 | `AI_FPS` | `5` | Số frame/giây gửi AI cho mỗi camera; máy yếu giảm xuống 2–3 |
+| `ALERT_MODE` | `backend` / `local` | `backend` = gửi sự kiện sang Backend API, Backend tạo cảnh báo. `local` = chạy thử không cần Backend |
+| `BACKEND_BASE_URL` | `http://host.docker.internal:5250` | Địa chỉ Backend API nhìn từ container zone-service |
 | `*_PORT` | | Đổi nếu bị trùng cổng trên máy |
 
 ## 5. Chạy hệ thống
@@ -115,6 +117,24 @@ docker compose up -d --build
 
 AI Service trên host tự gọi Zone Service ở `http://localhost:8010` (đổi bằng biến `ZONE_SERVICE_URL`).
 
+### Kết nối Backend API (cảnh báo chính thức)
+
+Cảnh báo do **Backend API** (.NET, cổng 5250) và Risk Engine tạo ra, gộp cả sự kiện camera lẫn cảm biến. Zone Service chỉ ghi `ai_event`, chụp bằng chứng rồi chuyển tiếp sang Backend:
+
+```text
+AI Service ─► Zone Service POST /api/ai-events
+                ├─ ghi ai_event (commit)
+                ├─ POST {BACKEND_BASE_URL}/api/v1/auth/token   (lấy token, giữ 12h, gặp 401 thì lấy lại)
+                ├─ POST {BACKEND_BASE_URL}/api/v1/events        {cameraId, areaId, objectType, confidence, occurredAt, aiEventId}
+                └─ nhận {alertId} ─► gán vào ai_event.alert_id và evidence.alert_id
+```
+
+- Chạy Backend trước theo hướng dẫn của nhóm Backend; mặc định Zone Service gọi `http://host.docker.internal:5250`.
+- Vi phạm còn kéo dài thì AI gửi lại mỗi giây (`RULE_EVENT_HEARTBEAT_SECONDS=1`), vì Risk Engine chỉ giữ nguồn AI trong 3 giây.
+- Backend tắt hoặc báo lỗi thì `ai_event` vẫn được lưu (`alert_id` để trống), AI vẫn chạy bình thường.
+- Chưa có Backend để test: đặt `ALERT_MODE=local` trong `.env`, Zone Service tự gom alert như trước.
+- Xem tình trạng kết nối: http://localhost:8010/api/integration/backend (số event đã gửi, số alertId nhận về, mã lỗi gần nhất).
+
 ### D. Chỉ xem video, không chạy AI
 
 ```dotenv
@@ -138,6 +158,7 @@ Các service phải ở trạng thái `running`; những service có healthcheck
 | --- | --- |
 | http://localhost:8010 | **Dashboard**: Live Cameras, YOLO Detection, Zone Editor, Evidence |
 | http://localhost:8010/docs | Swagger API của Zone Service |
+| http://localhost:8010/api/integration/backend | Tình trạng gửi sự kiện sang Backend API |
 | http://localhost:8003/health | Trạng thái AI Service (model, tracker, rule engine) |
 | http://localhost:8003/rules/status | Zone/rule AI đang dùng, số event đã gửi |
 | http://localhost:8003/docs | Swagger API của AI Service |
@@ -245,4 +266,7 @@ Khi thêm IoT Service hoặc Mosquitto: thêm service vào `docker-compose.yml`,
 | Sửa SQL trong `init/` mà database không đổi | SQL được đóng vào image zone-service | `docker compose up -d --build zone-service`; nếu đổi cấu trúc bảng đã có dữ liệu thì `docker compose down -v` (mất dữ liệu cũ) |
 | `zone-service` khởi động lại liên tục | Postgres chưa sẵn sàng hoặc lỗi SQL | `docker compose logs zone-service postgres` |
 | Build báo lỗi mạng khi `pip install` | Mạng chặn PyPI hoặc download.pytorch.org | Thử lại mạng khác, hoặc dùng chế độ C với venv đã cài |
+| `/api/integration/backend` báo `BACKEND_UNREACHABLE` hoặc `AUTH_FAILED` | Backend chưa chạy, sai địa chỉ, sai clientId/secret | Kiểm tra Backend ở cổng 5250, `BACKEND_BASE_URL`, `BACKEND_CLIENT_ID`/`BACKEND_CLIENT_SECRET`; chạy thử không Backend thì `ALERT_MODE=local` |
+| Báo `CAMERA_NOT_FOUND` / `AREA_NOT_FOUND` | Backend chưa có camera/khu vực trùng id với `config.docker.yaml` | Hai bên dùng chung `camera_id` và `location_id` (bảng `camera`, `location` trong Postgres) |
+| Báo `AI_EVENT_NOT_FOUND` | Backend đọc database khác với Zone Service | Backend và Zone Service phải dùng chung Postgres `hitek_ai_iot` |
 | Muốn làm lại từ đầu | | `docker compose down -v`, sau đó `docker compose up -d --build` |

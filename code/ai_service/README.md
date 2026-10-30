@@ -10,7 +10,8 @@ Camera / video giả lập (FFmpeg) ──RTSP──► MediaMTX
                                                     YOLOv11 → ByteTrack → Rule Engine
                                                     ├─ trả detection + rule_engine.violations về Gateway
                                                     └─ POST /api/ai-events ──► Zone Service
-                                                         (gom Alert, chụp snapshot, xin clip ±5s)
+                                                         ghi ai_event, chụp snapshot, xin clip ±5s
+                                                         └─ POST /api/v1/events ──► Backend API (Risk Engine tạo alert)
 ```
 
 AI Service (`local_bbox_service.py`) chạy trên máy host để dùng GPU. Rule Engine
@@ -60,8 +61,9 @@ Quy tắc thời gian và chống trùng:
 - Thời gian tính theo `captured_at` của frame, không theo đồng hồ trình duyệt.
 - Mỗi vi phạm có `source_event_id = camera|zone|rule|track|first_seq` (crowd dùng `crowd`).
 - Khi vi phạm còn kéo dài, AI Service gửi lại cùng `source_event_id` mỗi
-  `RULE_EVENT_HEARTBEAT_SECONDS` giây để Alert không bị resolve. Zone Service chỉ
-  cập nhật `last_seen_at`, không tăng `active_source_count`.
+  `RULE_EVENT_HEARTBEAT_SECONDS` giây (mặc định 1s). Zone Service cập nhật cùng dòng
+  `ai_event` và chuyển tiếp sang Backend với cùng `aiEventId`, `occurredAt` mới, để
+  Risk Engine (giữ nguồn AI 3 giây) kết hợp được với cảm biến.
 - Track mới xuất hiện trong vòng 3 giây, cách track cũ ≤ 80px, diện tích bbox
   tương đương sẽ kế thừa thời gian đứng của track cũ (`reattached_from`).
 
@@ -94,7 +96,7 @@ Kết quả mỗi frame AI Service trả về có thêm:
 | `RULE_ENGINE_ENABLED` | `true` | Tắt/bật Rule Engine. |
 | `ZONE_SERVICE_URL` | `http://localhost:8010` | Nơi lấy zone/rule và gửi AI Event. |
 | `RULE_CONFIG_TTL_SECONDS` | `10` | Chu kỳ tải lại zone/rule. |
-| `RULE_EVENT_HEARTBEAT_SECONDS` | `10` | Chu kỳ gửi lại event đang active. |
+| `RULE_EVENT_HEARTBEAT_SECONDS` | `1` | Chu kỳ gửi lại event đang active (Risk Engine của Backend chỉ giữ nguồn AI 3 giây). |
 | `RULE_STATE_EXPIRE_SECONDS` | `5` | Xóa state khi mất đối tượng quá N giây. |
 | `RULE_TIMEZONE_OFFSET_HOURS` | `7` | Múi giờ để so khung giờ active. |
 

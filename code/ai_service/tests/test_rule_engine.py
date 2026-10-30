@@ -114,6 +114,14 @@ class DwellRuleTests(RuleEngineTestCase):
         self.assertEqual(1, len({e["source_event_id"] for e in self.publisher.events}))
         self.assertEqual([1, 2, 3], [e["payload"]["heartbeat_index"] for e in self.publisher.events])
 
+    def test_default_heartbeat_is_under_backend_three_second_window(self):
+        engine = self.make_engine(zone(rule("loitering", duration_threshold=0)))
+        for tenth in range(0, 50):  # 5 giay, 10 frame/giay
+            engine.process(frame(tenth, tenth / 10.0, [det(7, 180, 150, 220, 250)]))
+        times = [e["last_seen_at"] for e in self.publisher.events]
+        self.assertEqual(5, len(times))  # 0s,1s,2s,3s,4s
+        self.assertEqual(1, len({e["source_event_id"] for e in self.publisher.events}))
+
     def test_track_id_switch_is_reattached_and_keeps_dwell_time(self):
         engine = self.make_engine(zone(rule("loitering", duration_threshold=6)))
         for second in range(0, 4):

@@ -30,6 +30,13 @@ class ZoneServiceSettings:
     evidence_video_post_seconds: float = 5.0
     evidence_video_fps: float = 10.0
     evidence_video_upload_url: str = "http://localhost:8010/api/evidence/video"
+    # backend: gui AI Event sang Backend API, Backend/Risk Engine tao canh bao (mac dinh).
+    # local  : Zone Service tu gom alert nhu truoc (dung khi chay thu khong co Backend).
+    alert_mode: str = "backend"
+    backend_base_url: str = "http://localhost:5250"
+    backend_client_id: str = "ai-service"
+    backend_client_secret: str = "ai-service-dev-secret"
+    backend_timeout_seconds: float = 2.0
 
 
 def load_settings() -> ZoneServiceSettings:
@@ -63,4 +70,9 @@ def load_settings() -> ZoneServiceSettings:
         evidence_video_post_seconds=float(os.getenv("EVIDENCE_VIDEO_POST_SECONDS", "5")),
         evidence_video_fps=float(os.getenv("EVIDENCE_VIDEO_FPS", "10")),
         evidence_video_upload_url=os.getenv("EVIDENCE_VIDEO_UPLOAD_URL", "http://localhost:8010/api/evidence/video"),
+        alert_mode=os.getenv("ALERT_MODE", "backend").strip().lower(),
+        backend_base_url=os.getenv("BACKEND_BASE_URL", "http://localhost:5250").rstrip("/"),
+        backend_client_id=os.getenv("BACKEND_CLIENT_ID", "ai-service"),
+        backend_client_secret=os.getenv("BACKEND_CLIENT_SECRET", "ai-service-dev-secret"),
+        backend_timeout_seconds=float(os.getenv("BACKEND_TIMEOUT_SECONDS", "2")),
     )

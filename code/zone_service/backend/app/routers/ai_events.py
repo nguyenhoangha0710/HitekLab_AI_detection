@@ -1,5 +1,6 @@
 import json
-from typing import List, Optional
+import logging
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -9,16 +10,44 @@ from ..database import Database
 from ..models import AiEventCreate, AiEventOut, AlertOut, EvidenceOut
 from ..repositories.ai_event_repository import AiEventRepository
 from ..repositories.alert_repository import AlertRepository
+from ..repositories.camera_repository import CameraRepository
 from ..repositories.evidence_repository import EvidenceRepository
 from ..serializers import ai_event_out, alert_out, evidence_out, evidence_path
 from ..services.evidence_capture_service import EvidenceCaptureService
 from ..services.evidence_policy_service import should_capture_alert_evidence as _should_capture_alert_evidence
 from ..services.evidence_storage_service import EvidenceStorageService
+from ..services.backend_event_client import BackendEventClient
 from ..services.evidence_video_request_service import request_video_evidence, video_storage_key
 
 
-def create_ai_event_router(database: Database, settings: ZoneServiceSettings) -> APIRouter:
+LOGGER = logging.getLogger(__name__)
+
+
+def build_backend_client(settings: ZoneServiceSettings) -> BackendEventClient:
+    return BackendEventClient(
+        base_url=settings.backend_base_url,
+        client_id=settings.backend_client_id,
+        client_secret=settings.backend_client_secret,
+        timeout_seconds=settings.backend_timeout_seconds,
+    )
+
+
+def create_ai_event_router(
+    database: Database,
+    settings: ZoneServiceSettings,
+    backend_client: Optional[BackendEventClient] = None,
+) -> APIRouter:
     router = APIRouter(tags=["ai-events"])
+    use_backend = settings.alert_mode == "backend"
+    if use_backend and backend_client is None:
+        backend_client = build_backend_client(settings)
+
+    @router.get("/api/integration/backend")
+    def backend_integration_status():
+        """Trang thai ket noi Backend API: so event da gui, alertId nhan ve, loi gan nhat."""
+        if not use_backend:
+            return {"alert_mode": settings.alert_mode, "enabled": False}
+        return {"alert_mode": settings.alert_mode, "enabled": True, **backend_client.status()}
 
     @router.get("/api/ai-events", response_model=List[AiEventOut])
     def list_ai_events(camera_id: Optional[str] = None, limit: int = Query(100, ge=1, le=500)):
@@ -36,26 +65,12 @@ def create_ai_event_router(database: Database, settings: ZoneServiceSettings) ->
 
     @router.post("/api/ai-events", response_model=AiEventOut, status_code=201)
     def upsert_ai_event(payload: AiEventCreate):
-        with database.session() as connection:
-            data = payload.dict()
-            event_repository = AiEventRepository(connection, database)
-            # AI Service gui lai cung source_event_id dinh ky (heartbeat) khi vi pham
-            # con keo dai -> chi cap nhat last_seen, khong dem thanh nguon moi.
-            is_new_source = event_repository.get_by_source_event_id(data["source_event_id"]) is None
-            alert_repository = AlertRepository(connection, database)
-            alert_repository.resolve_stale(settings.alert_resolve_grace_seconds)
-            alert = alert_repository.upsert_for_violation(data, is_new_source=is_new_source)
-            if alert is None:
-                raise HTTPException(status_code=404, detail="Camera not found")
-            data["alert_id"] = str(alert["id"])
-            row = event_repository.upsert(data)
-            if row is None:
-                raise HTTPException(status_code=404, detail="Camera not found")
-            # Clip video chi xin khi vua chup snapshot moi (theo EVIDENCE_INTERVAL_SECONDS),
-            # tranh moi heartbeat lai ghi 1 clip.
-            if _capture_snapshot_evidence(connection, database, settings, row, data):
-                request_video_evidence(settings, row, data)
-            return ai_event_out(row)
+        data = payload.dict()
+        if use_backend:
+            row = _upsert_via_backend(database, settings, backend_client, data)
+        else:
+            row = _upsert_with_local_alert(database, settings, data)
+        return ai_event_out(row)
 
     @router.get("/api/evidence", response_model=List[EvidenceOut])
     def list_evidence(
@@ -162,7 +177,9 @@ def _capture_snapshot_evidence(connection, database: Database, settings: ZoneSer
     event_payload = payload.get("payload") or {}
     frame_id = event_payload.get("frame_id")
     repository = EvidenceRepository(connection, database)
-    if not _should_capture_alert_evidence(repository, payload.get("alert_id"), payload, settings.evidence_interval_seconds):
+    if not _should_capture_alert_evidence(
+        repository, payload.get("alert_id"), payload, settings.evidence_interval_seconds, str(event_row["id"])
+    ):
         return False
     if repository.exists_for_event(str(event_row["id"]), frame_id):
         return False
@@ -189,3 +206,123 @@ def _capture_snapshot_evidence(connection, database: Database, settings: ZoneSer
         }
     )
     return True
+
+
+def _upsert_with_local_alert(database: Database, settings: ZoneServiceSettings, data: dict):
+    """ALERT_MODE=local: Zone Service tu gom alert (che do chay thu khong co Backend)."""
+    with database.session() as connection:
+        event_repository = AiEventRepository(connection, database)
+        # AI Service gui lai cung source_event_id dinh ky (heartbeat) khi vi pham
+        # con keo dai -> chi cap nhat last_seen, khong dem thanh nguon moi.
+        is_new_source = event_repository.get_by_source_event_id(data["source_event_id"]) is None
+        alert_repository = AlertRepository(connection, database)
+        alert_repository.resolve_stale(settings.alert_resolve_grace_seconds)
+        alert = alert_repository.upsert_for_violation(data, is_new_source=is_new_source)
+        if alert is None:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        data["alert_id"] = str(alert["id"])
+        row = event_repository.upsert(data)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        # Clip video chi xin khi vua chup snapshot moi (theo EVIDENCE_INTERVAL_SECONDS),
+        # tranh moi heartbeat lai ghi 1 clip.
+        if _capture_snapshot_evidence(connection, database, settings, row, data):
+            request_video_evidence(settings, row, data)
+        return row
+
+
+def _upsert_via_backend(database: Database, settings: ZoneServiceSettings, backend_client, data: dict):
+    """ALERT_MODE=backend: ghi ai_event -> commit -> POST Backend /api/v1/events -> gan alertId.
+
+    Phai commit ai_event truoc khi goi Backend, vi Backend doc ai_event tu database
+    (neu chua commit se nhan loi AI_EVENT_NOT_FOUND).
+    """
+    data["alert_id"] = None
+    # 1) Ghi ai_event va commit.
+    with database.session() as connection:
+        camera = CameraRepository(connection, database).get_camera(data["camera_id"])
+        if camera is None:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        row = AiEventRepository(connection, database).upsert(data)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        area_id = str(camera["location_id"])
+
+    # 2) Goi Backend (ngoai transaction). Loi Backend khong lam hong ai_event da luu.
+    result = backend_client.send_event(build_backend_event_payload(row, data, area_id))
+
+    # 3) Gan alertId (neu co) va xu ly bang chung.
+    with database.session() as connection:
+        event_repository = AiEventRepository(connection, database)
+        alert_id = result.alert_id if result.ok else None
+        if alert_id:
+            try:
+                with _savepoint(connection, database):
+                    AlertRepository(connection, database).ensure_backend_alert(alert_id, data)
+                    row = event_repository.set_alert_id(str(row["id"]), alert_id)
+                    EvidenceRepository(connection, database).attach_alert(str(row["id"]), alert_id)
+            except Exception as exc:
+                LOGGER.warning("BACKEND_ALERT_LINK_FAILED ai_event_id=%s alert_id=%s error=%s", row["id"], alert_id, exc)
+                alert_id = None
+                row = event_repository.get(str(row["id"]))
+        elif row["alert_id"]:
+            alert_id = str(row["alert_id"])
+
+        data["alert_id"] = alert_id
+        if _capture_snapshot_evidence(connection, database, settings, row, data):
+            request_video_evidence(settings, row, data)
+        return row
+
+
+def build_backend_event_payload(row, data: dict, area_id: str) -> Dict[str, Any]:
+    """Payload POST /api/v1/events theo thong nhat voi nhom Backend.
+
+    event_type khong gui: Backend tu doc tu ai_event.event_type.
+    """
+    return {
+        "cameraId": str(row["camera_id"]),
+        "areaId": area_id,
+        "objectType": data.get("object_type") or "person",
+        "confidence": _event_confidence(data),
+        "occurredAt": _iso_text(data.get("last_seen_at") or data["started_at"]),
+        "aiEventId": str(row["id"]),
+    }
+
+
+def _event_confidence(data: dict) -> float:
+    if data.get("confidence") is not None:
+        return float(data["confidence"])
+    detection = (data.get("payload") or {}).get("detection") or {}
+    if detection.get("confidence") is not None:
+        return float(detection["confidence"])
+    objects = ((data.get("payload") or {}).get("contract") or {}).get("objects") or []
+    values = [float(obj["confidence"]) for obj in objects if obj.get("confidence") is not None]
+    # crowd_limit: lay confidence thap nhat trong nhom; khong co thi coi la chac chan.
+    return min(values) if values else 1.0
+
+
+def _iso_text(value) -> str:
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+class _savepoint:
+    """SAVEPOINT de loi khoa ngoai khi gan alertId khong lam hong ca transaction."""
+
+    def __init__(self, connection, database: Database) -> None:
+        self.connection = connection
+        self.database = database
+
+    def __enter__(self):
+        self.connection.execute("SAVEPOINT backend_alert_link")
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.connection.execute("RELEASE SAVEPOINT backend_alert_link")
+        else:
+            self.connection.execute("ROLLBACK TO SAVEPOINT backend_alert_link")
+            self.connection.execute("RELEASE SAVEPOINT backend_alert_link")
+        return False
+

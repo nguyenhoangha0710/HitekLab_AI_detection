@@ -18,8 +18,9 @@ class RuleEngineSettings:
     reattach_distance_px: float = 80.0
     reattach_min_area_ratio: float = 0.5
     reattach_max_area_ratio: float = 2.0
-    # Gui lai event dang active moi N giay de alert khong bi resolve khi vi pham van keo dai.
-    heartbeat_seconds: float = 10.0
+    # Gui lai event dang active moi N giay. Risk Engine cua Backend coi nguon AI con
+    # hoat dong trong 3 giay ke tu event cuoi -> phai < 3s (mac dinh 1s).
+    heartbeat_seconds: float = 1.0
     # Mui gio dung de so khung gio active cua rule (Viet Nam = UTC+7).
     timezone_offset_hours: float = 7.0
     model_name: str = "yolo11n"

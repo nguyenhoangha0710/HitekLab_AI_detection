@@ -143,6 +143,67 @@ class AlertRepository:
         )
         return self.get(alert_id)
 
+    def ensure_backend_alert(self, alert_id: str, payload: Dict[str, Any]) -> Optional[sqlite3.Row]:
+        """Dam bao co dong `alert` voi id do Backend tra ve.
+
+        ai_event.alert_id / evidence.alert_id co khoa ngoai toi bang alert. Neu
+        Backend dung chung bang nay thi dong da ton tai va KHONG bi dong cham.
+        Neu Backend luu alert o noi khac, Zone Service tao 1 dong "mirror"
+        (dedup_key = 'backend:<id>') chi de giu khoa ngoai va hien thi tab Evidence.
+        """
+        camera = self.database.fetchone(
+            self.connection,
+            "SELECT tenant_id FROM camera WHERE id = ?",
+            (payload["camera_id"],),
+        )
+        if camera is None:
+            return None
+        now = utc_iso()
+        last_seen_at = payload.get("last_seen_at") or payload["started_at"]
+        self.database.execute(
+            self.connection,
+            """
+            INSERT INTO alert
+                (
+                    id, tenant_id, dedup_key, camera_id, zone_id, rule_config_id,
+                    rule_type, object_type, risk_level, lifecycle_status,
+                    active_source_count, first_sequence_number, last_sequence_number,
+                    started_at, last_seen_at, ended_at, payload, created_at, updated_at
+                )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                last_sequence_number = excluded.last_sequence_number,
+                last_seen_at = excluded.last_seen_at,
+                lifecycle_status = 'active',
+                ended_at = NULL,
+                updated_at = excluded.updated_at
+            WHERE alert.dedup_key LIKE ?
+            """,
+            (
+                alert_id,
+                camera["tenant_id"],
+                "backend:{}".format(alert_id),
+                payload["camera_id"],
+                payload.get("zone_id"),
+                payload.get("rule_config_id"),
+                payload["event_type"],
+                payload.get("object_type"),
+                "backend",
+                "active",
+                1,
+                payload.get("first_sequence_number"),
+                payload.get("last_sequence_number"),
+                payload["started_at"],
+                last_seen_at,
+                None,
+                self._payload_param({"source": "backend", **self._alert_payload(payload)}),
+                now,
+                now,
+                "backend:%",
+            ),
+        )
+        return self.get(alert_id)
+
     def _latest_active_by_dedup_key(self, dedup_key: str) -> Optional[sqlite3.Row]:
         return self.database.fetchone(
             self.connection,

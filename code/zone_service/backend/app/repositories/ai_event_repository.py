@@ -79,7 +79,7 @@ class AiEventRepository:
                 )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_event_id) DO UPDATE SET
-                alert_id = excluded.alert_id,
+                alert_id = COALESCE(excluded.alert_id, ai_event.alert_id),
                 lifecycle_status = excluded.lifecycle_status,
                 last_sequence_number = excluded.last_sequence_number,
                 last_seen_at = excluded.last_seen_at,
@@ -91,6 +91,17 @@ class AiEventRepository:
             values,
         )
         return self.get_by_source_event_id(payload["source_event_id"])
+
+    def get(self, ai_event_id: str) -> Optional[sqlite3.Row]:
+        return self.database.fetchone(self.connection, "SELECT * FROM ai_event WHERE id = ?", (ai_event_id,))
+
+    def set_alert_id(self, ai_event_id: str, alert_id: str) -> Optional[sqlite3.Row]:
+        self.database.execute(
+            self.connection,
+            "UPDATE ai_event SET alert_id = ?, updated_at = ? WHERE id = ?",
+            (alert_id, utc_iso(), ai_event_id),
+        )
+        return self.get(ai_event_id)
 
     def _payload_param(self, payload: Dict[str, Any]):
         if self.database.backend == "postgres":

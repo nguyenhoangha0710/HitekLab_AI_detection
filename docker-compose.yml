@@ -134,7 +134,7 @@ services:
       LOCAL_YOLO_DEVICE: ${YOLO_DEVICE:-cpu}
       RULE_ENGINE_ENABLED: ${RULE_ENGINE_ENABLED:-true}
       RULE_CONFIG_TTL_SECONDS: ${RULE_CONFIG_TTL_SECONDS:-10}
-      RULE_EVENT_HEARTBEAT_SECONDS: ${RULE_EVENT_HEARTBEAT_SECONDS:-10}
+      RULE_EVENT_HEARTBEAT_SECONDS: ${RULE_EVENT_HEARTBEAT_SECONDS:-1}
       RULE_TIMEZONE_OFFSET_HOURS: ${RULE_TIMEZONE_OFFSET_HOURS:-7}
     volumes:
       - ./code/ai_service/models:/app/models
@@ -182,6 +182,15 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-hitek-evidence}
       MINIO_SECURE: "false"
       TENANT_ID: ${TENANT_ID:-demo-tenant}
+      # backend: gui AI Event sang Backend API (/api/v1/events), Backend tao canh bao.
+      # local  : Zone Service tu gom alert (chay thu khi khong co Backend).
+      ALERT_MODE: ${ALERT_MODE:-backend}
+      BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://host.docker.internal:5250}
+      BACKEND_CLIENT_ID: ${BACKEND_CLIENT_ID:-ai-service}
+      BACKEND_CLIENT_SECRET: ${BACKEND_CLIENT_SECRET:-ai-service-dev-secret}
+      BACKEND_TIMEOUT_SECONDS: ${BACKEND_TIMEOUT_SECONDS:-2}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - zone-service-data:/app/code/zone_service/data
     ports:

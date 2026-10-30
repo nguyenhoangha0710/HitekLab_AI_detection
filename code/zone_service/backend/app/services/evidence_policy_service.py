@@ -2,8 +2,22 @@ from datetime import datetime, timezone
 from typing import Optional
 
 
-def should_capture_alert_evidence(repository, alert_id: Optional[str], payload: dict, interval_seconds: int) -> bool:
-    latest = repository.latest_for_alert(alert_id)
+def should_capture_alert_evidence(
+    repository,
+    alert_id: Optional[str],
+    payload: dict,
+    interval_seconds: int,
+    ai_event_id: Optional[str] = None,
+) -> bool:
+    """Chup toi da 1 snapshot moi `interval_seconds` cho moi alert.
+
+    Khi chua co alert (Backend tra alertId = null), gioi han theo tung ai_event de
+    heartbeat 1s/lan khong tao ra 1 anh moi giay.
+    """
+    if alert_id:
+        latest = repository.latest_for_alert(alert_id)
+    else:
+        latest = repository.latest_for_event(ai_event_id)
     if latest is None:
         return True
     previous = parse_time(latest["captured_at"])
