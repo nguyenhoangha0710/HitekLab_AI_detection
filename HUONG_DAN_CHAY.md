@@ -43,6 +43,7 @@ git checkout main          # hoặc branch nhóm đang tích hợp, ví dụ fea
 - Repo chỉ có sẵn `dummy_video_2.mp4`; cấu hình mặc định dùng file này cho cả 2 camera nên clone về là chạy được.
 - Video demo đầy đủ (`neighbors_yard.ts`, `video_4_police.mp4`, `stole.mp4`, `camera_test.mp4`...) không commit vì quá nặng. Lấy từ thư mục chung của nhóm, chép vào `code/data/videos/`, rồi khai báo tên file trong `.env` (`CAMERA1_VIDEO`, `CAMERA2_VIDEO`).
 - Thêm video mới: nên dùng `.mp4` (H.264) hoặc `.ts`, độ phân giải ≤ 1280×720.
+- Nguồn dữ liệu test công khai (CAVIAR, Mall, MOT17, ABODA...), kịch bản tự quay và cách ghi nhãn: xem [docs/DU_LIEU_TEST.md](docs/DU_LIEU_TEST.md).
 
 **Model YOLO.** Không cần chuẩn bị. Lần đầu AI Service nhận frame sẽ tự tải `yolo11n.pt` (khoảng 5 MB, cần Internet) vào `code/ai_service/models/`. Muốn dùng model khác: chép file `.pt` vào thư mục đó và sửa `YOLO_MODEL` trong `.env`.
 
