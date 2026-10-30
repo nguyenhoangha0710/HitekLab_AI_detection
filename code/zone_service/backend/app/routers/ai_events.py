@@ -153,13 +153,20 @@ def create_ai_event_router(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid evidence metadata JSON")
 
-        required_fields = ["ai_event_id", "alert_id", "camera_id", "captured_at"]
+        # alert_id KHONG bat buoc: o ALERT_MODE=backend su kien co the chua (hoac khong) thanh canh bao,
+        # clip van phai luu giong nhu anh snapshot. Khi Backend tra alertId sau, attach_alert se gan vao.
+        required_fields = ["ai_event_id", "camera_id", "captured_at"]
         missing = [field for field in required_fields if not payload.get(field)]
         if missing:
             raise HTTPException(status_code=400, detail="Missing fields: {}".format(", ".join(missing)))
 
         with database.session() as connection:
             access.require_camera(principal, connection, str(payload["camera_id"]), "operator")
+            if not payload.get("alert_id"):
+                # Su kien co the vua duoc gan canh bao trong luc Edge Gateway dang ghi clip.
+                event_row = AiEventRepository(connection, database).get(str(payload["ai_event_id"]))
+                if event_row is not None and event_row["alert_id"]:
+                    payload["alert_id"] = str(event_row["alert_id"])
 
         content = await file.read()
         if not content:

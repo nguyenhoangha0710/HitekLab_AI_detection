@@ -1,4 +1,5 @@
 import json
+import logging
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6,6 +7,8 @@ from typing import Optional
 
 from ..config import ZoneServiceSettings
 from .evidence_policy_service import parse_time
+
+LOGGER = logging.getLogger(__name__)
 
 
 def request_video_evidence(settings: ZoneServiceSettings, event_row, payload: dict) -> None:
@@ -30,8 +33,17 @@ def request_video_evidence(settings: ZoneServiceSettings, event_row, payload: di
     request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
     try:
         urllib.request.urlopen(request, timeout=1).read()
-    except Exception:
+    except Exception as exc:
+        # Khong lam hong luong su kien, nhung phai de lai dau vet de biet vi sao khong co clip.
+        LOGGER.warning(
+            "EVIDENCE_VIDEO_REQUEST_FAILED ai_event_id=%s camera=%s url=%s error=%s",
+            request_payload["ai_event_id"],
+            request_payload["camera_id"],
+            url,
+            exc,
+        )
         return
+    LOGGER.info("EVIDENCE_VIDEO_REQUESTED ai_event_id=%s camera=%s", request_payload["ai_event_id"], request_payload["camera_id"])
 
 
 def video_storage_key(payload: dict, filename: Optional[str]) -> str:

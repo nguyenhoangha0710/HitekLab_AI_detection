@@ -149,8 +149,10 @@ export function createEventsView(root, { toast }) {
     return start && end ? (end - start) / 1000 : 0;
   }
 
-  const CLIP_WAIT_SECONDS = 90; // clip +-5s duoc Edge Gateway ghi va tai len sau vai giay
-  const CLIP_POLL_MS = 5000;
+  // Clip +-5s chi duoc xin khi vua chup anh moi; Edge Gateway ghi them 5 giay roi ma hoa, tai len.
+  // Qua 30 giay sau anh ma van chua co clip thi coi nhu clip that bai (xem log Edge Gateway).
+  const CLIP_WAIT_SECONDS = 30;
+  const CLIP_POLL_MS = 4000;
 
   async function fetchEvidence(e) {
     const own = await api(`/api/ai-events/${encodeURIComponent(e.id)}/evidence`);
@@ -175,9 +177,9 @@ export function createEventsView(root, { toast }) {
       const evidence = await fetchEvidence(e);
       if (state.selectedId !== eventId) return;
       const hasClip = evidence.some(isClip);
-      const lastSeen = toDate(e.last_seen_at || e.started_at);
-      const recent = lastSeen && (Date.now() - lastSeen.getTime()) / 1000 < CLIP_WAIT_SECONDS;
-      const waiting = !hasClip && recent && attempt < CLIP_WAIT_SECONDS / (CLIP_POLL_MS / 1000);
+      const newest = evidence.filter((x) => !isClip(x)).map((x) => toDate(x.captured_at)).filter(Boolean).sort((a, b) => b - a)[0];
+      const recent = newest && (Date.now() - newest.getTime()) / 1000 < CLIP_WAIT_SECONDS;
+      const waiting = !hasClip && recent && attempt < Math.ceil((CLIP_WAIT_SECONDS * 1000) / CLIP_POLL_MS);
       renderDetail(evidence, false, waiting);
       if (waiting) state.pollTimer = window.setTimeout(() => select(eventId, attempt + 1), CLIP_POLL_MS);
     } catch (error) {
@@ -227,7 +229,7 @@ export function createEventsView(root, { toast }) {
     const wait = !clips.length
       ? waiting
         ? `<div class="media-wait">Clip ±5 giây đang được ghi và tải lên, màn hình sẽ tự cập nhật.</div>`
-        : `<p class="muted">Chưa có clip cho sự kiện này (Edge Gateway chưa ghi được, hoặc tắt EVIDENCE_VIDEO_ENABLED).</p>`
+        : `<p class="muted">Không có clip cho lần chụp này. Xem lý do trong log: <code>docker logs hitek-edge-gateway</code>, tìm dòng EVIDENCE_VIDEO.</p>`
       : "";
     return clipHtml + snapshotHtml + wait;
   }

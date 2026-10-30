@@ -149,7 +149,10 @@ class VideoEvidenceRecorder:
                     data={"metadata": json.dumps(metadata, separators=(",", ":"))},
                     files={"file": ("clip.mp4", handle, "video/mp4")},
                 )
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    raise RuntimeError(
+                        "upload {} -> HTTP {}: {}".format(request.upload_url, response.status_code, response.text[:300])
+                    )
 
         LOGGER.info(
             "EVIDENCE_VIDEO_UPLOADED job=%s camera=%s event=%s frames=%s status=%s",
