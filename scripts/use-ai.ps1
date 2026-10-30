@@ -111,7 +111,7 @@ function Show-Status {
     catch {
         Write-Host "AI chua tra loi tai http://localhost:$port/health" -ForegroundColor Red
         if ($mode -eq "remote") {
-            Write-Host "  - VS Code da ket noi khoa-gpu chua? (~/.ssh/config can LocalForward 8003 / RemoteForward 18010)"
+            Write-Host "  - Duong ham SSH da mo chua? ssh -N -L ${port}:localhost:18003 -R 18010:localhost:8010 khoa-gpu"
             Write-Host "  - AI da chay tren server chua? (tren server: bash scripts/run_ai_remote.sh)"
         }
         else {
@@ -157,16 +157,21 @@ switch ($Mode) {
         }
     }
     "remote" {
+        # Cong tren laptop noi vao duong ham SSH (-L <cong>:localhost:18003). Mac dinh 8003,
+        # doi bang AI_SERVICE_PORT trong .env neu 8003 bi Windows/VS Code giu (vd 28003).
+        $remotePort = Get-EnvValue $lines "AI_SERVICE_PORT"
+        if (-not $remotePort) { $remotePort = "8003" }
         Set-EnvValues @{
             COMPOSE_PROFILES       = (Join-Profiles $false)
             COMPOSE_FILE           = "docker-compose.yml"
-            AI_SERVICE_WS_URL      = "ws://host.docker.internal:8003/ws/detect"
+            AI_SERVICE_WS_URL      = "ws://host.docker.internal:$remotePort/ws/detect"
             EDGE_MODE              = "viewer-ai"
             AI_FPS                 = "5"
             EDGE_AI_QUEUE_SIZE     = "1"
         }
-        if (-not (Test-LocalPort 8003)) {
-            Write-Host "Canh bao: cong 8003 tren may nay chua mo. Ket noi VS Code toi khoa-gpu va chay AI tren server truoc." -ForegroundColor Yellow
+        if (-not (Test-LocalPort ([int]$remotePort))) {
+            Write-Host "Canh bao: cong $remotePort tren may nay chua mo. Mo duong ham truoc:" -ForegroundColor Yellow
+            Write-Host "  ssh -N -o ServerAliveInterval=30 -L ${remotePort}:localhost:18003 -R 18010:localhost:8010 khoa-gpu" -ForegroundColor Yellow
         }
     }
     "off" {

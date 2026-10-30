@@ -203,6 +203,7 @@ Lưu ý:
 - `SERVICE_API_KEY` trên server (mặc định `hitek-dev-service-key`) phải giống trong `.env` của laptop.
 - VS Code mất kết nối thì AI ngừng nhận frame (video vẫn chạy); kết nối lại là chạy tiếp.
 - Docker không gọi được cổng 8003 (log edge-gateway báo `EDGE_AI_BBOX_WS_FAILED`): đổi thành `LocalForward 0.0.0.0:8003 localhost:18003`.
+- Windows báo `bind [127.0.0.1]:8003: Permission denied` (cổng bị VS Code hoặc Windows giữ): dùng cổng khác, ví dụ đặt `AI_SERVICE_PORT=28003` trong `.env`, mở đường hầm bằng PowerShell `ssh -N -o ServerAliveInterval=30 -L 28003:localhost:18003 -R 18010:localhost:8010 khoa-gpu`, rồi chạy `.\scripts\use-ai.ps1 remote` (script tự dùng cổng trong `AI_SERVICE_PORT`).
 - Server dùng chung: AI chỉ nghe ở `127.0.0.1`, tắt AI khi không dùng. Cổng 18003/18010 bị người khác chiếm thì đổi số (`AI_PORT=...` khi chạy script, `ZONE_SERVICE_URL=http://localhost:<cổng>` và sửa `RemoteForward` cho khớp).
 
 ### D. Chỉ xem video, không chạy AI
