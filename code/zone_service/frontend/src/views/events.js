@@ -17,7 +17,7 @@ import { cameraName, store } from "../core/store.js";
 const PAGE_SIZE = 500;
 
 export function createEventsView(root, { toast }) {
-  const state = { events: [], selectedId: null, filters: { camera: "", type: "", from: "", to: "", alert: "" } };
+  const state = { events: [], selectedId: null, pollTimer: null, filters: { camera: "", type: "", from: "", to: "", alert: "" } };
 
   function render() {
     root.innerHTML = `
@@ -149,39 +149,103 @@ export function createEventsView(root, { toast }) {
     return start && end ? (end - start) / 1000 : 0;
   }
 
-  async function select(eventId) {
-    state.selectedId = eventId;
-    root.querySelectorAll("[data-event]").forEach((row) => row.classList.toggle("selected", row.dataset.event === eventId));
-    renderDetail(null, true);
+  const CLIP_WAIT_SECONDS = 90; // clip +-5s duoc Edge Gateway ghi va tai len sau vai giay
+  const CLIP_POLL_MS = 5000;
+
+  async function fetchEvidence(e) {
+    const own = await api(`/api/ai-events/${encodeURIComponent(e.id)}/evidence`);
+    if (!e.alert_id) return own;
+    // Bang chung chi chup 1 lan cho moi canh bao -> lay ca bang chung cua cac su kien cung canh bao.
+    const params = new URLSearchParams({ camera_id: e.camera_id, limit: "200" });
+    const sameAlert = (await api(`/api/evidence?${params}`).catch(() => [])).filter((x) => x.alert_id === e.alert_id);
+    const byId = new Map([...own, ...sameAlert].map((x) => [x.id, x]));
+    return Array.from(byId.values()).sort((x, y) => String(y.captured_at).localeCompare(String(x.captured_at)));
+  }
+
+  async function select(eventId, attempt = 0) {
+    window.clearTimeout(state.pollTimer);
+    if (attempt === 0) {
+      state.selectedId = eventId;
+      root.querySelectorAll("[data-event]").forEach((row) => row.classList.toggle("selected", row.dataset.event === eventId));
+      renderDetail(null, true);
+    }
+    const e = state.events.find((item) => item.id === eventId);
+    if (!e) return;
     try {
-      const evidence = await api(`/api/ai-events/${encodeURIComponent(eventId)}/evidence`);
-      if (state.selectedId === eventId) renderDetail(evidence);
+      const evidence = await fetchEvidence(e);
+      if (state.selectedId !== eventId) return;
+      const hasClip = evidence.some(isClip);
+      const lastSeen = toDate(e.last_seen_at || e.started_at);
+      const recent = lastSeen && (Date.now() - lastSeen.getTime()) / 1000 < CLIP_WAIT_SECONDS;
+      const waiting = !hasClip && recent && attempt < CLIP_WAIT_SECONDS / (CLIP_POLL_MS / 1000);
+      renderDetail(evidence, false, waiting);
+      if (waiting) state.pollTimer = window.setTimeout(() => select(eventId, attempt + 1), CLIP_POLL_MS);
     } catch (error) {
       renderDetail([]);
       toast(`Không tải được bằng chứng: ${error.message}`, "error");
     }
   }
 
-  function renderDetail(evidence = null, loading = false) {
+  function isClip(item) {
+    return item.evidence_type === "video_clip" || String(item.mime_type || "").startsWith("video/");
+  }
+
+  function mediaBlock(e, evidence, loading, waiting) {
+    if (loading) return `<p class="muted">Đang tải bằng chứng…</p>`;
+    const media = (item) => escapeHtml(withToken(item.media_url));
+    const clips = (evidence || []).filter(isClip);
+    const snapshots = (evidence || []).filter((x) => !isClip(x));
+    const fromAlert = (item) => (item.ai_event_id !== e.id ? " (cùng cảnh báo)" : "");
+    if (!clips.length && !snapshots.length) {
+      return waiting
+        ? `<div class="media-wait">Clip ±5 giây đang được ghi và tải lên, màn hình sẽ tự cập nhật.</div>`
+        : `<p class="muted">Sự kiện này chưa có ảnh hoặc clip. Bằng chứng chỉ được chụp một lần cho mỗi cảnh báo trong mỗi 2 phút.</p>`;
+    }
+    const poster = snapshots[0] ? ` poster="${media(snapshots[0])}"` : "";
+    const clipHtml = clips
+      .map(
+        (c, i) => `
+        <figure class="evidence-media">
+          <video controls muted playsinline preload="metadata"${i === 0 ? poster : ""} src="${media(c)}"></video>
+          <figcaption>Clip ${c.duration_seconds ? `${Number(c.duration_seconds).toFixed(0)} giây` : "±5 giây"} quanh lúc vi phạm, ${escapeHtml(formatDateTime(c.captured_at))}${escapeHtml(fromAlert(c))}${c.status && c.status !== "completed" ? `, trạng thái ${escapeHtml(c.status)}` : ""}</figcaption>
+        </figure>`
+      )
+      .join("");
+    const snapshotHtml = clips.length
+      ? `<div class="snapshot-strip">${snapshots
+          .map((s) => `<a href="${media(s)}" target="_blank" rel="noopener" title="Ảnh chụp lúc ${escapeHtml(formatDateTime(s.captured_at))}${escapeHtml(fromAlert(s))}"><img src="${media(s)}" alt="Ảnh chụp lúc ${escapeHtml(formatDateTime(s.captured_at))}"></a>`)
+          .join("")}</div>`
+      : snapshots
+          .map(
+            (s) => `
+        <figure class="evidence-media">
+          <img src="${media(s)}" alt="Ảnh bằng chứng lúc ${escapeHtml(formatDateTime(s.captured_at))}">
+          <figcaption>Ảnh chụp lúc vi phạm, ${escapeHtml(formatDateTime(s.captured_at))}${escapeHtml(fromAlert(s))}</figcaption>
+        </figure>`
+          )
+          .join("");
+    const wait = !clips.length
+      ? waiting
+        ? `<div class="media-wait">Clip ±5 giây đang được ghi và tải lên, màn hình sẽ tự cập nhật.</div>`
+        : `<p class="muted">Chưa có clip cho sự kiện này (Edge Gateway chưa ghi được, hoặc tắt EVIDENCE_VIDEO_ENABLED).</p>`
+      : "";
+    return clipHtml + snapshotHtml + wait;
+  }
+
+  function renderDetail(evidence = null, loading = false, waiting = false) {
     const panel = root.querySelector("[data-detail]");
     if (!panel) return;
     const e = state.events.find((item) => item.id === state.selectedId);
     if (!e) {
-      panel.innerHTML = `<p class="empty-note">Chọn một sự kiện trong bảng để xem ảnh, clip và chi tiết.</p>`;
+      panel.innerHTML = `<p class="empty-note">Chọn một sự kiện trong bảng để xem clip, ảnh và chi tiết.</p>`;
       return;
     }
     const p = e.payload || {};
     const objects = p.contract?.objects || [];
-    const snapshots = (evidence || []).filter((x) => x.evidence_type === "snapshot");
-    const clips = (evidence || []).filter((x) => x.evidence_type === "video_clip" || String(x.mime_type).startsWith("video/"));
-    const media = (item) => escapeHtml(withToken(item.media_url));
     panel.innerHTML = `
       <h2>${escapeHtml(ruleLabel(e.event_type))}</h2>
       <p class="muted">${escapeHtml(cameraName(e.camera_id))}, vùng ${escapeHtml(p.zone_name || "–")}</p>
-      ${loading ? `<p class="muted">Đang tải bằng chứng…</p>` : ""}
-      ${clips.map((c) => `<video controls muted preload="metadata" src="${media(c)}"></video>`).join("")}
-      ${snapshots.map((s) => `<img src="${media(s)}" alt="Ảnh bằng chứng lúc ${escapeHtml(formatDateTime(s.captured_at))}">`).join("")}
-      ${!loading && evidence && !evidence.length ? `<p class="muted">Sự kiện này chưa có ảnh hoặc clip. Bằng chứng chỉ chụp 1 lần cho mỗi cảnh báo trong ${escapeHtml("120 giây")}.</p>` : ""}
+      ${mediaBlock(e, evidence, loading, waiting)}
       <dl class="facts">
         <dt>Bắt đầu</dt><dd>${escapeHtml(formatDateTime(e.started_at))}</dd>
         <dt>Thấy lần cuối</dt><dd>${escapeHtml(formatDateTime(e.last_seen_at))}</dd>
@@ -200,5 +264,10 @@ export function createEventsView(root, { toast }) {
       }`;
   }
 
-  return { mount: render, unmount() {} };
+  return {
+    mount: render,
+    unmount() {
+      window.clearTimeout(state.pollTimer);
+    },
+  };
 }
